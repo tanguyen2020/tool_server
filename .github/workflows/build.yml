@@ -1,0 +1,156 @@
+# Builds Server Dashboard for Windows, macOS and Linux on every push and pull request.
+# Pushing a tag vX.Y.Z also publishes a GitHub release with the builds and a signed latest.json, which the
+# app's built-in updater reads (see desktop/internal/updater). Signing needs the UPDATE_SIGNING_KEY secret.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - name: Vet
+        run: go vet ./internal/... ./tools/...
+      - name: Unit tests
+        run: go test ./internal/...
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+            asset: ServerDashboard-windows-amd64.exe
+          - os: macos-latest
+            platform: darwin/universal
+            asset: ServerDashboard-macos-universal
+          - os: ubuntu-22.04
+            platform: linux/amd64
+            asset: ServerDashboard-linux-amd64
+            tags: webkit2_41
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            # Builds that are not releases never update themselves (see updater.IsDev).
+            echo "value=0.0.0-dev+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        run: >
+          wails build -clean -trimpath -skipbindings
+          -platform ${{ matrix.platform }}
+          ${{ matrix.tags && format('-tags {0}', matrix.tags) || '' }}
+          -ldflags "-s -w -X main.version=${{ steps.version.outputs.value }}"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          case "$RUNNER_OS" in
+            Windows)
+              cp build/bin/ServerDashboard.exe "dist/${{ matrix.asset }}"
+              ;;
+            macOS)
+              # The bare executable is what the updater swaps inside the installed .app.
+              cp build/bin/ServerDashboard.app/Contents/MacOS/ServerDashboard "dist/${{ matrix.asset }}"
+              (cd build/bin && ditto -c -k --keepParent ServerDashboard.app ../../dist/ServerDashboard-macos-universal.zip)
+              ;;
+            Linux)
+              cp build/bin/ServerDashboard "dist/${{ matrix.asset }}"
+              tar -C build/bin -czf dist/ServerDashboard-linux-amd64.tar.gz ServerDashboard
+              ;;
+          esac
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: desktop/dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Release notes
+        run: |
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          range=${prev:+$prev..}$GITHUB_REF_NAME
+          git log --no-merges --pretty='- %s' "$range" > notes.md
+          cat notes.md
+
+      - name: Signed update manifest
+        working-directory: desktop
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::The UPDATE_SIGNING_KEY secret is missing: add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          go run ./tools/updatesign manifest -version "$GITHUB_REF_NAME" -dir ../release -notes "$(cat ../notes.md)"
+          go run ./tools/updatesign sign -in ../release/latest.json
+          pub=$(grep -o 'PublicKey = "[^"]*"' internal/updater/updater.go | cut -d'"' -f2)
+          go run ./tools/updatesign verify -in ../release/latest.json -pub "$pub"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "Server Dashboard $GITHUB_REF_NAME" \
+            --notes-file notes.md

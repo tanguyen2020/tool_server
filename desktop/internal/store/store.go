@@ -92,7 +92,8 @@ var DefaultThresholds = Thresholds{CPU: 90, Memory: 90, Disk: 90, IOWait: 30, Su
 type Settings struct {
 	Notifications bool       `json:"notifications"`
 	Alerts        Thresholds `json:"alerts"`
-	Theme         string     `json:"theme"` // system, light or dark
+	Theme         string     `json:"theme"`      // system, light or dark
+	AutoUpdate    bool       `json:"autoUpdate"` // check, download and install new releases by itself
 	// UI holds small view preferences of the page (chosen view, sort, last tab…), kept here rather than only
 	// in the WebView storage, which loses recent writes when the app is killed.
 	UI map[string]string `json:"ui,omitempty"`
@@ -117,7 +118,7 @@ func Open() (*Store, error) {
 	}
 	secret.KeyDir = dir
 	// Defaults stay in place for keys missing from an older settings.json.
-	s := &Store{dir: dir, settings: Settings{Notifications: true, Alerts: DefaultThresholds}}
+	s := &Store{dir: dir, settings: Settings{Notifications: true, Alerts: DefaultThresholds, AutoUpdate: true}}
 	if err := readJSON(filepath.Join(dir, "servers.json"), &s.servers); err != nil {
 		return nil, err
 	}

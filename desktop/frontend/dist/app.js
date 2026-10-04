@@ -9,6 +9,7 @@ import { networkTab } from './network.js';
 import { openRunMany } from './runmany.js';
 import { openSnippets, snippetMenu } from './snippets.js';
 import { openActivity } from './activity.js';
+import { initUpdates } from './updates.js';
 import { createTabManager, hashFor } from './tabs.js';
 import { openServerForm } from './server-form.js';
 import { openInspect } from './inspect.js';
@@ -116,6 +117,7 @@ async function boot() {
   const savedTheme = data.settings.theme || 'system';
   if (savedTheme !== currentTheme()) applyTheme(savedTheme, false);
   notifyToggle.checked = data.settings.notifications;
+  initUpdates(state.settings, document.getElementById('version-btn'));
 
   tabs = createTabManager({
     strip: document.getElementById('tabs'),

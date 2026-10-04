@@ -1,5 +1,5 @@
 # Build the production exe: build/bin/ServerDashboard.exe
-# Requires: Go 1.22+ and the Wails CLI (go install github.com/wailsapp/wails/v2/cmd/wails@latest)
+# Requires: Go (version in go.mod) and the Wails CLI (go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 go test ./internal/...

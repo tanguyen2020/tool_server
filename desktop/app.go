@@ -19,6 +19,7 @@ import (
 	"serverdash/internal/sshpool"
 	"serverdash/internal/store"
 	"serverdash/internal/theme"
+	"serverdash/internal/updater"
 )
 
 // App holds the methods the UI calls through window.go.main.App.*
@@ -37,6 +38,7 @@ type App struct {
 	tun   tunnels
 	runs  runs
 	act   *activity.Log
+	upd   *updater.Updater
 }
 
 func NewApp(st *store.Store, hist *history.Store) *App {
@@ -82,6 +84,7 @@ func (a *App) startup(ctx context.Context) {
 		runtime.LogWarning(ctx, "notifications: "+err.Error())
 	}
 	go a.mon.Run(runCtx)
+	go a.autoUpdate(runCtx)
 }
 
 func (a *App) shutdown(context.Context) {
@@ -97,6 +100,7 @@ func (a *App) shutdown(context.Context) {
 	if a.hist != nil {
 		_ = a.hist.Close()
 	}
+	a.installOnExit()
 	runtime.CleanupNotifications(a.ctx)
 }
 

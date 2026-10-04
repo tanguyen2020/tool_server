@@ -1,5 +1,8 @@
 # Server Dashboard
 
+> **Ứng dụng chính là bản desktop trong [`desktop/`](desktop/README.md)** (Windows, macOS, Linux; tự cập nhật).
+> Tải bản mới nhất ở trang [Releases](../../releases/latest). Phần bên dưới mô tả bản web cũ (Node.js), giữ lại để tham khảo.
+
 Dashboard web theo dõi nhiều server Debian + Docker qua **SSH, không cần cài agent**.
 
 - Server: trạng thái online/offline, CPU tổng + từng core, RAM, swap, load, uptime, ổ đĩa, network, biểu đồ realtime.

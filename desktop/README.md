@@ -122,9 +122,48 @@ Data lives in `%AppData%\ServerDashboard\`:
 ## Building
 
 ```powershell
-go install github.com/wailsapp/wails/v2/cmd/wails@latest   # once
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0   # once
 ./build.ps1
 ```
+
+Local builds report the version `dev` and never update themselves.
+
+## Releases and automatic updates
+
+GitHub Actions (`.github/workflows/build.yml`) builds Windows, macOS (universal) and Linux on every push.
+**Pushing a version tag publishes a release:**
+
+```bash
+git tag v1.2.0 -m "Server Dashboard 1.2.0"
+git push origin v1.2.0
+```
+
+The release contains the builds and `latest.json` (version, notes, size and SHA-256 of each platform's
+executable) with `latest.json.sig`, an **Ed25519 signature** made in CI with the private release key.
+The app embeds the matching public key (`internal/updater/updater.go`). It checks for a newer release
+20 seconds after start and then every 6 hours, downloads it in the background, verifies the signature and
+the checksum, and installs it when the app closes (or right away with *Restart now*). Nothing that is not
+signed with the project's key is ever installed. Turn it off in the Updates dialog (click the version in
+the top bar).
+
+Release files:
+
+| File | For |
+|---|---|
+| `ServerDashboard-windows-amd64.exe` | Windows: run it from any folder you can write to (it updates itself in place) |
+| `ServerDashboard-macos-universal.zip` | macOS (Intel and Apple Silicon): unzip, move to Applications |
+| `ServerDashboard-linux-amd64.tar.gz` | Linux: needs `libwebkit2gtk-4.1-0` and `libgtk-3-0` (Ubuntu 22.04+, Debian 12+) |
+| `ServerDashboard-macos-universal`, `ServerDashboard-linux-amd64` | Used by the updater |
+| `latest.json`, `latest.json.sig` | Signed update manifest |
+
+**Signing key setup (once):** the private key lives only in the repository secret `UPDATE_SIGNING_KEY`
+(Settings → Secrets and variables → Actions). Keep an offline backup: if it is lost, generate a new pair with
+`go run ./tools/updatesign genkey -out <file>`, put the new public key in `updater.PublicKey`, and users of
+older versions must download the next version by hand once. The repository must be **public** for the app to
+download releases.
+
+> macOS builds are not notarized: the first time, right-click the app and choose *Open* (or run
+> `xattr -dr com.apple.quarantine "/Applications/ServerDashboard.app"`). Updates after that need nothing.
 
 ## Performance
 
@@ -145,6 +184,7 @@ go install github.com/wailsapp/wails/v2/cmd/wails@latest   # once
 | `internal/ops` | Compose projects, Docker cleanup, systemd, listening ports, disk usage, apt upgrade |
 | `internal/hostinfo` | Top processes, maintenance (updates, reboot, certificates), reboot |
 | `internal/activity` | Activity log |
+| `internal/updater`, `app_update.go`, `tools/updatesign` | Signed automatic updates from GitHub releases |
 | `app_ops.go`, `app_files.go`, `app_tools.go`, `terminal.go` | Server operations, SFTP files, tunnels / run-on-servers / snippets / import-export, terminals and tasks |
 | `internal/store`, `internal/secret` | Config storage, DPAPI encryption (AES-GCM outside Windows) |
 | `frontend/dist` | UI (no build step) |

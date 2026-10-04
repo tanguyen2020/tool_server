@@ -3,23 +3,32 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 	"path/filepath"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"serverdash/internal/history"
 	"serverdash/internal/store"
 	"serverdash/internal/theme"
+	"serverdash/internal/updater"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	// After an update the new version is started by the old one: let the old window close first.
+	updater.WaitForParent(os.Args[1:])
+	upd := updater.New(version)
+	upd.CleanupOld()
+
 	st, err := store.Open()
 	if err != nil {
 		log.Fatal(err)
@@ -30,6 +39,7 @@ func main() {
 		hist = nil
 	}
 	app := NewApp(st, hist)
+	app.upd = upd
 	// Start with the saved theme so the window never flashes the wrong colour.
 	mode := st.Settings().Theme
 	bgR, bgG, bgB := theme.Background(mode)
@@ -69,6 +79,10 @@ func main() {
 			// dropping the WebView2 GPU process saves ~190 MB of RAM.
 			WebviewGpuIsDisabled: true,
 		},
+		Mac: &mac.Options{
+			About: &mac.AboutInfo{Title: "Server Dashboard", Message: "Version " + version},
+		},
+		Linux: &linux.Options{ProgramName: "Server Dashboard"},
 	})
 	if err != nil {
 		log.Fatal(err)
