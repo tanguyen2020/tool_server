@@ -1,0 +1,19 @@
+{
+  "name": "server-dashboard",
+  "version": "0.1.0",
+  "description": "Agentless SSH dashboard for Debian + Docker servers",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --watch --env-file-if-exists=.env src/server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ssh2": "^1.17.0",
+    "ws": "^8.22.0"
+  }
+}

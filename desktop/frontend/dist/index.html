@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server Dashboard</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <img src="favicon.svg" alt="" width="20" height="20">
+      <span>Server Dashboard</span>
+    </a>
+    <div class="topbar-actions">
+      <button type="button" class="btn act act-start" id="run-btn" title="Run one command on several servers at once">Run on servers</button>
+      <button type="button" class="btn act act-exec" id="snippets-btn" title="Saved commands">Snippets</button>
+      <button type="button" class="btn act act-logs" id="activity-btn" title="What was done from this app">Activity</button>
+      <button type="button" class="btn ghost" id="alerts-btn" title="Alert thresholds">Alerts</button>
+      <label class="check" title="Windows notifications when a server becomes unreachable or a container stops unexpectedly"><input type="checkbox" id="notify-toggle"> Notifications</label>
+      <button type="button" class="btn ghost theme-btn" id="theme-toggle">◐ System</button>
+    </div>
+  </header>
+  <nav class="tabbar" id="tabs" role="tablist" aria-label="Open servers"></nav>
+  <main id="view"></main>
+
+  <dialog id="server-dialog" class="dialog">
+    <form method="dialog" id="server-form" class="form">
+      <h2 id="server-dialog-title">Add server</h2>
+      <div class="grid-2">
+        <label>Display name<input name="name" placeholder="e.g. prod-api-01"></label>
+        <label>Group<input name="group" placeholder="e.g. production" list="group-list"></label>
+      </div>
+      <datalist id="group-list"></datalist>
+      <div class="grid-host">
+        <label>Host / IP<input name="host" required placeholder="10.0.0.12"></label>
+        <label>Port<input name="port" type="number" value="22" min="1" max="65535"></label>
+        <label>User<input name="username" required placeholder="deploy"></label>
+      </div>
+      <label>Authentication
+        <select name="authType">
+          <option value="key">Private key (paste content)</option>
+          <option value="keyPath">Private key (file on this computer)</option>
+          <option value="agent">SSH agent (Windows OpenSSH)</option>
+          <option value="password">Password</option>
+        </select>
+      </label>
+      <label data-auth="key">Private key<textarea name="privateKey" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+      <label data-auth="keyPath">Private key file
+        <span class="input-row"><input name="privateKeyPath" placeholder="~/.ssh/id_ed25519"><button type="button" class="btn ghost" id="pick-key">Browse…</button></span>
+      </label>
+      <label data-auth="key keyPath">Passphrase (if any)<input name="passphrase" type="password" autocomplete="new-password"></label>
+      <label data-auth="password">SSH password<input name="password" type="password" autocomplete="new-password"></label>
+      <p class="hint" id="secret-hint" hidden>Leave secret fields empty to keep the saved values.</p>
+      <label class="check"><input type="checkbox" name="useSudo"> Run docker with <code>sudo -n</code> (when the user is not in the docker group)</label>
+      <label>Connect through (jump host / bastion)
+        <select name="jumpId"><option value="">Direct connection</option></select>
+        <span class="hint">For servers only reachable through another saved server, like <code>ssh -J</code>.</span>
+      </label>
+      <p class="form-msg" id="server-form-msg" role="status"></p>
+      <div class="form-actions">
+        <button type="button" class="btn ghost" id="server-test">Test connection</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" id="server-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="alerts-dialog" class="dialog">
+    <form method="dialog" id="alerts-form" class="form">
+      <h2>Alert thresholds</h2>
+      <p class="hint">Applies to every server. CPU, memory and I/O wait must stay at or above the threshold for the sustain time; disk and inode alerts fire right away. An alert resolves once the value drops 5 points below its threshold.</p>
+      <div class="grid-2">
+        <label>CPU usage (%)<input name="cpu" type="number" min="1" max="100" step="1" required></label>
+        <label>Memory usage (%)<input name="memory" type="number" min="1" max="100" step="1" required></label>
+        <label>Disk &amp; inode usage (%)<input name="disk" type="number" min="1" max="100" step="1" required></label>
+        <label>I/O wait (%)<input name="iowait" type="number" min="1" max="100" step="1" required></label>
+        <label>Sustained for (minutes)<input name="sustainMinutes" type="number" min="0" max="120" step="0.5" required></label>
+      </div>
+      <p class="form-msg" id="alerts-msg" role="status"></p>
+      <div class="form-actions">
+        <button type="button" class="btn ghost" id="alerts-defaults">Reset to defaults</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" id="alerts-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="inspect-dialog" class="dialog wide" aria-labelledby="inspect-title">
+    <div class="inspect">
+      <div class="inspect-head">
+        <div class="inspect-title">
+          <h2 id="inspect-title"></h2>
+          <div class="muted" id="inspect-sub"></div>
+        </div>
+        <div class="inspect-tools">
+          <div class="tabs" role="tablist">
+            <button type="button" class="tab active" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+            <button type="button" class="tab" role="tab" data-tab="raw" aria-selected="false">Raw JSON</button>
+          </div>
+          <label class="check"><input type="checkbox" id="inspect-reveal"> Show secret values</label>
+          <button type="button" class="btn ghost" id="inspect-refresh">Refresh</button>
+          <button type="button" class="btn ghost" id="inspect-copy">Copy JSON</button>
+          <button type="button" class="btn ghost icon" id="inspect-close" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div class="inspect-body" id="inspect-body"></div>
+    </div>
+  </dialog>
+
+  <section id="logs" class="logs dock" hidden aria-label="Logs and terminals">
+    <div class="logs-resize" id="logs-resize" title="Drag to resize" aria-hidden="true"></div>
+    <div class="dock-bar">
+      <div class="dock-tabs" id="dock-tabs" role="tablist" aria-label="Logs and terminals"></div>
+      <button type="button" class="btn ghost sm" id="dock-new-term" title="Open a shell on this server">+ Terminal</button>
+      <span class="spacer"></span>
+      <div class="term-tools" id="term-tools" hidden>
+        <button type="button" class="btn ghost sm" id="term-snippets" title="Type a saved command into this terminal">Snippets</button>
+        <button type="button" class="btn ghost sm" id="term-search-btn" title="Search the terminal (Ctrl+Shift+F)">Search</button>
+        <button type="button" class="btn ghost sm" id="term-font-down" title="Smaller text (Ctrl+-)" aria-label="Smaller text">A−</button>
+        <button type="button" class="btn ghost sm" id="term-font-up" title="Larger text (Ctrl+=)" aria-label="Larger text">A+</button>
+      </div>
+      <button type="button" class="btn ghost icon" id="logs-max" aria-label="Maximize panel" title="Maximize">⤢</button>
+      <button type="button" class="btn ghost icon" id="dock-collapse" aria-label="Collapse panel" title="Collapse (sessions keep running)">▾</button>
+    </div>
+    <div class="dock-pane" id="logs-pane">
+    <div class="logs-head">
+      <div class="logs-title">
+        <strong id="logs-name"></strong><span class="muted" id="logs-server"></span><span class="chip" id="logs-state"></span>
+        <span class="muted logs-count" id="logs-count"></span>
+      </div>
+      <div class="logs-tools">
+        <button type="button" class="btn ghost" id="logs-pause">Pause</button>
+        <button type="button" class="btn ghost" id="logs-clear">Clear</button>
+        <button type="button" class="btn ghost" id="logs-download">Save</button>
+      </div>
+    </div>
+    <div class="logs-options">
+      <input id="logs-filter" type="search" placeholder="Search logs…" aria-label="Search logs">
+      <div class="level-filter" id="logs-levels" role="group" aria-label="Show log levels"></div>
+      <span class="spacer"></span>
+      <select id="logs-tail" aria-label="Initial lines">
+        <option value="100">Last 100 lines</option>
+        <option value="500" selected>Last 500 lines</option>
+        <option value="2000">Last 2000 lines</option>
+      </select>
+      <label class="check"><input type="checkbox" id="logs-ts" checked> Time</label>
+      <label class="check"><input type="checkbox" id="logs-wrap" checked> Wrap lines</label>
+      <label class="check"><input type="checkbox" id="logs-json"> Prettify JSON</label>
+    </div>
+    <div class="logs-volume">
+      <canvas id="logs-volume" role="img" aria-label="Log volume over time by level"></canvas>
+      <div class="tooltip" id="logs-volume-tip" hidden></div>
+    </div>
+    <div class="logs-body wrap" id="logs-body" role="log" aria-live="off"></div>
+    <button type="button" class="btn primary jump" id="logs-jump" hidden>↓ Jump to latest</button>
+    </div>
+    <div class="dock-pane" id="term-pane" hidden>
+      <div class="term-search" id="term-search" hidden>
+        <input type="search" id="term-search-input" placeholder="Find in terminal…" aria-label="Find in terminal">
+        <button type="button" class="btn ghost sm" id="term-search-prev" title="Previous (Shift+Enter)">↑</button>
+        <button type="button" class="btn ghost sm" id="term-search-next" title="Next (Enter)">↓</button>
+        <button type="button" class="btn ghost sm icon" id="term-search-close" aria-label="Close search">✕</button>
+      </div>
+      <div class="term-host" id="term-host"></div>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

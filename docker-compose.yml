@@ -1,0 +1,13 @@
+services:
+  dashboard:
+    build: .
+    container_name: server-dashboard
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Chỉ mở trên localhost; truy cập từ xa qua VPN / reverse proxy HTTPS.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/app/data
+      # Nếu dùng authType "keyPath", mount thư mục key (read-only):
+      # - ~/.ssh:/keys:ro

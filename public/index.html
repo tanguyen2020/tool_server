@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server Dashboard</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <img src="favicon.svg" alt="" width="20" height="20">
+      <span>Server Dashboard</span>
+    </a>
+    <nav class="crumbs" id="crumbs"></nav>
+    <div class="topbar-actions">
+      <span class="conn" id="conn" title="Kết nối realtime"><span class="dot"></span><span class="conn-label">Đang kết nối…</span></span>
+      <button class="btn ghost icon" id="theme-toggle" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối">◐</button>
+      <button class="btn ghost" id="logout">Đăng xuất</button>
+    </div>
+  </header>
+  <main id="view"></main>
+
+  <dialog id="server-dialog" class="dialog">
+    <form method="dialog" id="server-form" class="form">
+      <h2 id="server-dialog-title">Thêm server</h2>
+      <div class="grid-2">
+        <label>Tên hiển thị<input name="name" placeholder="vd: prod-api-01"></label>
+        <label>Nhóm<input name="group" placeholder="vd: production" list="group-list"></label>
+      </div>
+      <datalist id="group-list"></datalist>
+      <div class="grid-host">
+        <label>Host / IP<input name="host" required placeholder="10.0.0.12"></label>
+        <label>Port<input name="port" type="number" value="22" min="1" max="65535"></label>
+        <label>User<input name="username" required placeholder="deploy"></label>
+      </div>
+      <label>Kiểu xác thực
+        <select name="authType">
+          <option value="key">Private key (dán nội dung)</option>
+          <option value="keyPath">Private key (đường dẫn file trên máy chạy tool)</option>
+          <option value="agent">SSH agent / Pageant</option>
+          <option value="password">Mật khẩu</option>
+        </select>
+      </label>
+      <label data-auth="key">Private key<textarea name="privateKey" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+      <label data-auth="keyPath">Đường dẫn private key<input name="privateKeyPath" placeholder="C:\Users\me\.ssh\id_ed25519"></label>
+      <label data-auth="key keyPath">Passphrase (nếu có)<input name="passphrase" type="password" autocomplete="new-password"></label>
+      <label data-auth="password">Mật khẩu SSH<input name="password" type="password" autocomplete="new-password"></label>
+      <p class="hint" id="secret-hint" hidden>Để trống các ô bí mật để giữ giá trị đã lưu.</p>
+      <label class="check"><input type="checkbox" name="useSudo"> Chạy docker bằng <code>sudo -n</code> (khi user không thuộc group docker)</label>
+      <p class="form-msg" id="server-form-msg" role="status"></p>
+      <div class="form-actions">
+        <button type="button" class="btn ghost" id="server-test">Thử kết nối</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" id="server-cancel">Huỷ</button>
+        <button type="submit" class="btn primary">Lưu</button>
+      </div>
+    </form>
+  </dialog>
+
+  <section id="logs" class="logs" hidden aria-label="Log container">
+    <div class="logs-head">
+      <div class="logs-title"><strong id="logs-name"></strong><span class="muted" id="logs-server"></span><span class="chip" id="logs-state"></span></div>
+      <div class="logs-tools">
+        <input id="logs-filter" type="search" placeholder="Lọc log…" aria-label="Lọc log">
+        <select id="logs-tail" aria-label="Số dòng ban đầu">
+          <option value="100">100 dòng</option>
+          <option value="500" selected>500 dòng</option>
+          <option value="2000">2000 dòng</option>
+        </select>
+        <label class="check"><input type="checkbox" id="logs-wrap" checked> Wrap</label>
+        <label class="check"><input type="checkbox" id="logs-ts"> Thời gian</label>
+        <button class="btn ghost" id="logs-pause">Tạm dừng</button>
+        <button class="btn ghost" id="logs-clear">Xoá</button>
+        <button class="btn ghost" id="logs-download">Tải về</button>
+        <button class="btn ghost icon" id="logs-close" aria-label="Đóng log">✕</button>
+      </div>
+    </div>
+    <div class="logs-body wrap" id="logs-body"></div>
+    <button class="btn primary jump" id="logs-jump" hidden>↓ Xuống cuối</button>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

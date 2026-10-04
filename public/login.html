@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Đăng nhập · Server Dashboard</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <script type="module" src="login.js"></script>
+</head>
+<body class="login-page">
+  <form class="login-card form" id="login-form">
+    <div class="brand"><img src="favicon.svg" alt="" width="24" height="24"><span>Server Dashboard</span></div>
+    <label>Tài khoản<input name="username" autocomplete="username" required autofocus></label>
+    <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required></label>
+    <p class="form-msg" id="login-msg" role="alert"></p>
+    <button class="btn primary" type="submit">Đăng nhập</button>
+  </form>
+</body>
+</html>

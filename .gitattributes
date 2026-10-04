@@ -1,0 +1,5 @@
+# Keep LF line endings in the repository and in checkouts (the CI builds on Linux and macOS too).
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
