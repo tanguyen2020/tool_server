@@ -160,6 +160,14 @@ Release files:
 
 CI installs and uninstalls each package on its runner (silent Windows install, `apt install` of the .deb, mounting the .dmg) before publishing.
 
+**Download warnings on Windows.** The executables are not signed with a code-signing certificate, so
+SmartScreen and browsers show "unknown publisher" / "not commonly downloaded" warnings for new versions (Defender
+finds nothing in them). To check a download, compare it with `SHA256SUMS.txt` of the release
+(`Get-FileHash <file>` in PowerShell). To remove the warnings, add a code-signing certificate as the
+repository secrets `WINDOWS_SIGN_PFX` (the .pfx file in base64) and `WINDOWS_SIGN_PASSWORD`: CI then signs the
+executable and the setup with signtool. Until then you can submit a release file to Microsoft
+(https://www.microsoft.com/wdsi/filesubmission, "Software developer") to clear its reputation.
+
 **Signing key setup (once):** the private key lives only in the repository secret `UPDATE_SIGNING_KEY`
 (Settings → Secrets and variables → Actions). Keep an offline backup: if it is lost, generate a new pair with
 `go run ./tools/updatesign genkey -out <file>`, put the new public key in `updater.PublicKey`, and users of

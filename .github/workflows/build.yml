@@ -75,6 +75,12 @@ jobs:
             echo "value=0.0.0-dev+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Version in the app's file properties
+        run: |
+          V="${{ steps.version.outputs.value }}"
+          sed -i.bak "s/\"productVersion\": \"[^\"]*\"/\"productVersion\": \"${V%%[-+]*}\"/" wails.json && rm wails.json.bak
+          grep productVersion wails.json
+
       - name: Build
         run: >
           wails build -clean -trimpath -skipbindings
@@ -82,20 +88,44 @@ jobs:
           ${{ matrix.tags && format('-tags {0}', matrix.tags) || '' }}
           -ldflags "-s -w -X main.version=${{ steps.version.outputs.value }}"
 
+      - name: Code signing certificate (optional)
+        if: runner.os == 'Windows'
+        env:
+          PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+        run: |
+          # With the WINDOWS_SIGN_PFX (base64 .pfx) and WINDOWS_SIGN_PASSWORD secrets the exe and the setup are
+          # signed, so Windows shows the publisher instead of "unknown publisher". Without them: unsigned.
+          if [ -n "$PFX" ]; then
+            echo "$PFX" | base64 -d > "$RUNNER_TEMP/sign.pfx"
+            echo "SIGN_PFX=$RUNNER_TEMP/sign.pfx" >> "$GITHUB_ENV"
+            echo "Signing enabled"
+          else
+            echo "No WINDOWS_SIGN_PFX secret: Windows files are not signed"
+          fi
+
       - name: Package
+        env:
+          SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
         run: |
           mkdir -p dist
           V="${{ steps.version.outputs.value }}"
+          sign() {
+            [ -n "$SIGN_PFX" ] || return 0
+            signtool=$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/signtool.exe | sort -V | tail -1)
+            "$signtool" sign //fd sha256 //tr http://timestamp.digicert.com //td sha256 //f "$(cygpath -w "$SIGN_PFX")" //p "$SIGN_PASSWORD" "$(cygpath -w "$1")"
+          }
           case "$RUNNER_OS" in
             Windows)
+              sign build/bin/ServerDashboard.exe
               cp build/bin/ServerDashboard.exe "dist/${{ matrix.asset }}"
               # Installer (per-user, no admin): NSIS is on the runner image; install it when it is not.
               if ! command -v makensis >/dev/null; then
                 [ -x "/c/Program Files (x86)/NSIS/makensis.exe" ] || choco install nsis -y --no-progress
                 export PATH="/c/Program Files (x86)/NSIS:$PATH"
               fi
-              makensis -V2 -DVERSION="$V" -DSRC="$(cygpath -w "$PWD/build/bin/ServerDashboard.exe")" \
+              makensis -V2 -DVERSION="$V" -DVIVERSION="${V%%[-+]*}.0" -DSRC="$(cygpath -w "$PWD/build/bin/ServerDashboard.exe")" \
                 -DOUTFILE="$(cygpath -w "$PWD/dist/ServerDashboard-windows-amd64-setup.exe")" build/windows/installer/setup.nsi
+              sign dist/ServerDashboard-windows-amd64-setup.exe
               ;;
             macOS)
               # The bare executable is what the updater swaps inside the installed .app.
@@ -203,6 +233,9 @@ jobs:
           go run ./tools/updatesign sign -in ../release/latest.json
           pub=$(grep -o 'PublicKey = "[^"]*"' internal/updater/updater.go | cut -d'"' -f2)
           go run ./tools/updatesign verify -in ../release/latest.json -pub "$pub"
+
+      - name: Checksums
+        run: (cd release && sha256sum ServerDashboard-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Publish the release
         env:

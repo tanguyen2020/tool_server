@@ -6,11 +6,15 @@
   "frontend:build": "",
   "frontend:dir": "frontend",
   "wailsjsdir": "",
-  "author": { "name": "TaNguyen", "email": "" },
+  "author": {
+    "name": "TaNguyen",
+    "email": "75058422+tanguyen2020@users.noreply.github.com"
+  },
   "info": {
-    "companyName": "",
+    "companyName": "TaNguyen",
     "productName": "Server Dashboard",
     "productVersion": "1.0.0",
-    "comments": "Monitor Debian + Docker servers over SSH"
+    "copyright": "Copyright (c) 2026 TaNguyen",
+    "comments": "Monitor and operate Debian + Docker servers over SSH. https://github.com/tanguyen2020/tool_server"
   }
 }

@@ -22,7 +22,21 @@ Unicode true
 !define EXE "ServerDashboard.exe"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ServerDashboard"
 
+!ifndef VIVERSION
+  !define VIVERSION "0.0.0.0"
+!endif
+
 Name "${APPNAME}"
+; Publisher details shown in the file properties and by Windows when it asks to run the setup.
+VIProductVersion "${VIVERSION}"
+VIFileVersion "${VIVERSION}"
+VIAddVersionKey "ProductName" "${APPNAME}"
+VIAddVersionKey "CompanyName" "TaNguyen"
+VIAddVersionKey "FileDescription" "${APPNAME} Setup"
+VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 TaNguyen"
+VIAddVersionKey "Comments" "https://github.com/tanguyen2020/tool_server"
 OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\Programs\ServerDashboard"
 InstallDirRegKey HKCU "${UNINSTKEY}" "InstallLocation"
