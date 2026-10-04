@@ -941,3 +941,25 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .servers-table tbody tr.srv-row:hover .srv-title { color: var(--accent-ink); }
 .servers-table tbody tr.srv-row:active { transform: translateY(0); }
 @media (prefers-reduced-motion: reduce) { .servers-table tbody tr.srv-row, .servers-table tbody tr.srv-row:hover { transition: none; transform: none; } }
+
+/* ---------- Work tables: hovered row ----------
+   Containers, services, files, ports and activity rows are not opened by a click (their actions are the
+   buttons): the hovered row is outlined and tinted to guide the eye to its buttons, without lifting. */
+:is(.containers-table, .services-table, .files-table, .ports-table, .activity-table) tbody tr:not(.project-row) td {
+  transition: background-color 0.12s, box-shadow 0.12s;
+}
+:is(.containers-table, .services-table, .files-table, .ports-table, .activity-table) tbody tr:not(.project-row):has(td:not(.empty)):hover td {
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 70%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--accent) 70%, transparent);
+}
+:is(.containers-table, .services-table, .files-table, .ports-table, .activity-table) tbody tr:not(.project-row):has(td:not(.empty)):hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 1px 0 color-mix(in srgb, var(--accent) 70%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--accent) 70%, transparent);
+}
+:is(.containers-table, .services-table, .files-table, .ports-table, .activity-table) tbody tr.row-issue:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--critical), inset 0 1px 0 color-mix(in srgb, var(--accent) 70%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--accent) 70%, transparent);
+}
+:is(.containers-table, .services-table, .files-table, .ports-table, .activity-table) tbody tr:not(.project-row):has(td:not(.empty)):hover td:last-child {
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--accent) 70%, transparent), inset 0 1px 0 color-mix(in srgb, var(--accent) 70%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--accent) 70%, transparent);
+}
+:is(.containers-table, .services-table) tbody tr:hover :is(.c-name, .svc-name) { color: var(--accent-ink); }
+.files-table tbody tr:hover .file-name { color: var(--accent-ink); }
