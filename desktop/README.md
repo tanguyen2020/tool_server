@@ -150,7 +150,7 @@ Release files:
 
 | File | For |
 |---|---|
-| `ServerDashboard-windows-amd64-setup.exe` | **Windows installer**: installs for your account in %LOCALAPPDATA%ProgramsServerDashboard (no admin rights), Start menu and desktop shortcuts, uninstall from *Apps & features*. Updates itself. |
+| `ServerDashboard-windows-amd64-setup.exe` | **Windows installer**: installs for your account in `%LOCALAPPDATA%\Programs\ServerDashboard` (no admin rights), Start menu and desktop shortcuts, uninstall from *Apps & features*. Updates itself. |
 | `ServerDashboard-windows-amd64.exe` | Windows without installing: run it from any folder you can write to (it updates itself in place) |
 | `ServerDashboard-macos-universal.dmg` | **macOS** (Intel and Apple Silicon): open, drag the app to Applications. Updates itself. |
 | `ServerDashboard-linux-amd64.deb` | **Debian / Ubuntu**: `sudo apt install ./ServerDashboard-linux-amd64.deb` (menu entry and `serverdash` command). Installed in /opt, so new versions are announced in the app and installed the same way. |
