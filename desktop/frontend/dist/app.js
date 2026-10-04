@@ -174,7 +174,7 @@ function describeTab(key) {
     dot: snap.status === 'online' ? 'good' : snap.status === 'offline' ? 'critical' : snap.status === 'rebooting' ? 'warning' : '',
     badge: issues ? String(issues) : '',
     badgeTitle: `${issues} alert${issues > 1 ? 's' : ''} or container issue${issues > 1 ? 's' : ''}`,
-    tooltip: `${cfg?.username}@${cfg?.host} · ${snap.status || 'connecting'}`,
+    tooltip: [cfg?.name, snap.host?.hostname !== cfg?.name && snap.host?.hostname, `${cfg?.username}@${cfg?.host}`, snap.status || 'connecting'].filter(Boolean).join(' · '),
   };
 }
 
@@ -237,10 +237,14 @@ function serverIssues(snap) {
   if (bad.length) out.push({ level: 'critical', text: `${bad.length} container issue${bad.length > 1 ? 's' : ''}`, title: bad.map((c) => c.name).join('\n') });
   const m = snap.maintenance;
   if (m) {
-    for (const c of m.certs || []) {
-      const days = Math.floor((c.notAfter - Date.now()) / 86400e3);
-      if (days < 0) out.push({ level: 'critical', text: 'Certificate expired', title: c.subject || c.path });
-      else if (days <= 14) out.push({ level: 'critical', text: `Certificate expires in ${days} d`, title: c.subject || c.path });
+    const daysOf = (c) => Math.floor((c.notAfter - Date.now()) / 86400e3);
+    const expired = (m.certs || []).filter((c) => daysOf(c) < 0);
+    const expiring = (m.certs || []).filter((c) => daysOf(c) >= 0 && daysOf(c) <= 14);
+    const names = (list) => list.map((c) => `${c.subject || c.path} (${daysOf(c) < 0 ? 'expired' : `${daysOf(c)} d left`})`).join('\n');
+    if (expired.length) out.push({ level: 'critical', text: expired.length > 1 ? `${expired.length} certificates expired` : 'Certificate expired', title: names(expired) });
+    if (expiring.length) {
+      const soonest = Math.min(...expiring.map(daysOf));
+      out.push({ level: 'critical', text: expiring.length > 1 ? `${expiring.length} certificates expire soon` : `Certificate expires in ${soonest} d`, title: names(expiring) });
     }
     if (m.rebootRequired) out.push({ level: 'warning', text: 'Reboot required', title: m.rebootReason || '' });
     if (m.securityUpdates) out.push({ level: 'warning', text: `${m.securityUpdates} security update${m.securityUpdates > 1 ? 's' : ''}`, title: '' });
@@ -260,6 +264,12 @@ function issueChips(issues, max) {
     shown.push(h('span', { class: 'chip more', title: rest.map((i) => i.text).join('\n') }, `+${rest.length}`));
   }
   return shown;
+}
+
+// The machine's own hostname, shown next to the name given in the app (unless they are the same).
+function hostLabel(cfg, host) {
+  const hn = host?.hostname;
+  return hn && hn !== cfg.name && hn !== cfg.host ? h('span', { class: 'host-name' }, hn) : '';
 }
 
 // "deploy@10.0.0.5 · Ubuntu 22.04" — without repeating the address when the name already is the address.
@@ -324,7 +334,8 @@ function serverCard(id) {
     const snap = state.snaps.get(id) || { status: 'connecting' };
     const host = snap.host;
     el.classList.toggle('offline', snap.status === 'offline' || snap.status === 'rebooting');
-    name.textContent = cfg.name;
+    name.replaceChildren(cfg.name, hostLabel(cfg, host));
+    name.title = host?.hostname && host.hostname !== cfg.name ? `${cfg.name} · ${host.hostname}` : cfg.name;
     sub.textContent = serverSub(cfg, host);
     sub.title = `${cfg.username}@${cfg.host}:${cfg.port}${host?.os ? ` · ${host.os}` : ''}`;
     chipSlot.replaceChildren(statusChip(snap.status));
@@ -376,7 +387,7 @@ function serverRow(id) {
     const badContainers = (d?.containers || []).filter(hasIssue).length;
     tr.replaceChildren(
       h('td', {}, statusChip(snap.status)),
-      h('td', { class: 'srv-name' }, h('div', { class: 'srv-title' }, cfg.name), h('div', { class: 'muted small srv-sub', title: `${cfg.username}@${cfg.host}:${cfg.port}` }, serverSub(cfg, host))),
+      h('td', { class: 'srv-name' }, h('div', { class: 'srv-title', title: host?.hostname || '' }, cfg.name, hostLabel(cfg, host)), h('div', { class: 'muted small srv-sub', title: `${cfg.username}@${cfg.host}:${cfg.port}` }, serverSub(cfg, host))),
       pctCell(host?.cpu, host ? `${host.cores} cores` : '', 'CPU'),
       pctCell(host?.mem.pct, host ? `${fmtBytes(host.mem.used, 0)} / ${fmtBytes(host.mem.total, 0)}` : '', 'RAM'),
       pctCell(disk?.pct, disk ? `${disk.mount} · ${fmtBytes(disk.size, 0)}` : '', 'Fullest disk'),
@@ -966,7 +977,7 @@ function detailView(id, root) {
     if (!c) return;
     const snap = state.snaps.get(id) || { status: 'connecting' };
     const host = snap.host;
-    title.textContent = c.name;
+    title.replaceChildren(c.name, hostLabel(c, host));
     chipSlot.replaceChildren(statusChip(snap.status));
     const rebooting = snap.status === 'rebooting';
     rebootBtn.disabled = rebooting || snap.status !== 'online';

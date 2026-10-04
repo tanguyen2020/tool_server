@@ -896,3 +896,9 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .upd-actions { display: flex; gap: 8px; margin-top: 12px; }
 .upd-actions:empty { display: none; }
 .upd-auto { margin-top: 14px; }
+
+/* ---------- Hostname next to the server name ---------- */
+.host-name { margin-left: 8px; font-weight: 500; font-size: 0.86em; color: var(--accent-ink); }
+.card-title .host-name::before, .srv-title .host-name::before { content: "· "; color: var(--muted); }
+.detail-head h1 .host-name { font-size: 15px; }
+.detail-head h1 .host-name::before { content: "· "; color: var(--muted); }
