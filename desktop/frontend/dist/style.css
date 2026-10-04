@@ -205,8 +205,19 @@ textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 14px 16px; text-decoration: none; cursor: pointer;
   box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
-.card:hover, .card:focus-visible { border-color: var(--border-strong); outline: none; }
+/* Hover: accent border, a light accent tint, lifted with a shadow — clear which server the pointer is on. */
+.card:hover, .card:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 24px color-mix(in srgb, var(--accent) 22%, transparent);
+  transform: translateY(-2px);
+  outline: none;
+}
+.card:hover .card-title { color: var(--accent-ink); }
+.card:active { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .card, .card:hover { transition: none; transform: none; } }
 .card.offline { opacity: 0.85; }
 .card-head { display: flex; align-items: flex-start; gap: 8px; }
 .card-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -902,3 +913,10 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .card-title .host-name::before, .srv-title .host-name::before { content: "· "; color: var(--muted); }
 .detail-head h1 .host-name { font-size: 15px; }
 .detail-head h1 .host-name::before { content: "· "; color: var(--muted); }
+
+/* ---------- Server list: hovered row ---------- */
+.servers-table tbody tr.srv-row td { transition: background-color 0.12s; }
+.servers-table tbody tr.srv-row:hover td { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); }
+.servers-table tbody tr.srv-row:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.servers-table tbody tr.srv-row.row-issue:hover td:first-child { box-shadow: inset 3px 0 0 var(--critical); }
+.servers-table tbody tr.srv-row:hover .srv-title { color: var(--accent-ink); }
