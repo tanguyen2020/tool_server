@@ -39,6 +39,8 @@ type App struct {
 	runs  runs
 	act   *activity.Log
 	upd   *updater.Updater
+
+	announced string // update version already announced (installs that cannot update themselves)
 }
 
 func NewApp(st *store.Store, hist *history.Store) *App {

@@ -150,11 +150,15 @@ Release files:
 
 | File | For |
 |---|---|
-| `ServerDashboard-windows-amd64.exe` | Windows: run it from any folder you can write to (it updates itself in place) |
-| `ServerDashboard-macos-universal.zip` | macOS (Intel and Apple Silicon): unzip, move to Applications |
-| `ServerDashboard-linux-amd64.tar.gz` | Linux: needs `libwebkit2gtk-4.1-0` and `libgtk-3-0` (Ubuntu 22.04+, Debian 12+) |
-| `ServerDashboard-macos-universal`, `ServerDashboard-linux-amd64` | Used by the updater |
+| `ServerDashboard-windows-amd64-setup.exe` | **Windows installer**: installs for your account in %LOCALAPPDATA%ProgramsServerDashboard (no admin rights), Start menu and desktop shortcuts, uninstall from *Apps & features*. Updates itself. |
+| `ServerDashboard-windows-amd64.exe` | Windows without installing: run it from any folder you can write to (it updates itself in place) |
+| `ServerDashboard-macos-universal.dmg` | **macOS** (Intel and Apple Silicon): open, drag the app to Applications. Updates itself. |
+| `ServerDashboard-linux-amd64.deb` | **Debian / Ubuntu**: `sudo apt install ./ServerDashboard-linux-amd64.deb` (menu entry and `serverdash` command). Installed in /opt, so new versions are announced in the app and installed the same way. |
+| `ServerDashboard-linux-amd64.tar.gz` | Other Linux: unpack anywhere you can write to; needs `libwebkit2gtk-4.1-0` and `libgtk-3-0`. Updates itself. |
+| `ServerDashboard-macos-universal.zip`, `ServerDashboard-macos-universal`, `ServerDashboard-linux-amd64` | Plain app / executables (the last two are used by the updater) |
 | `latest.json`, `latest.json.sig` | Signed update manifest |
+
+CI installs and uninstalls each package on its runner (silent Windows install, `apt install` of the .deb, mounting the .dmg) before publishing.
 
 **Signing key setup (once):** the private key lives only in the repository secret `UPDATE_SIGNING_KEY`
 (Settings → Secrets and variables → Actions). Keep an offline backup: if it is lost, generate a new pair with

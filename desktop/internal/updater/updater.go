@@ -60,6 +60,24 @@ type Info struct {
 	Page      string `json:"page"`   // release page
 	Staged    string `json:"staged"` // version downloaded and ready to install
 	Dev       bool   `json:"dev"`    // development build: never replaced automatically
+	// CanInstall is false when the app sits in a folder this user cannot write (installed by a system
+	// package, or copied to Program Files): new versions are then downloaded by hand from Page.
+	CanInstall bool `json:"canInstall"`
+}
+
+// Writable reports whether the app can replace its own executable.
+func (u *Updater) Writable() bool {
+	if u.exe == "" {
+		return false
+	}
+	f, err := os.CreateTemp(filepath.Dir(u.exe), ".update-check-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
 }
 
 // PlatformKey names this build in the manifest: windows-amd64, linux-amd64, darwin-universal.
@@ -203,6 +221,7 @@ func (u *Updater) Check(ctx context.Context) (Info, error) {
 	info.Page = "https://github.com/" + Repo + "/releases/tag/v" + m.Version
 	_, hasAsset := m.Assets[PlatformKey()]
 	info.Available = hasAsset && !info.Dev && Newer(m.Version, u.current)
+	info.CanInstall = info.Available && u.Writable()
 	return info, nil
 }
 
@@ -217,6 +236,9 @@ func (u *Updater) Download(ctx context.Context, progress func(done, total int64)
 	}
 	if IsDev(u.current) {
 		return errors.New("development builds are not updated")
+	}
+	if !u.Writable() {
+		return fmt.Errorf("the app is in a folder you cannot write to (%s): download the new version from GitHub", filepath.Dir(u.exe))
 	}
 	asset, ok := m.Assets[PlatformKey()]
 	if !ok {

@@ -85,21 +85,78 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
+          V="${{ steps.version.outputs.value }}"
           case "$RUNNER_OS" in
             Windows)
               cp build/bin/ServerDashboard.exe "dist/${{ matrix.asset }}"
+              # Installer (per-user, no admin): NSIS is on the runner image; install it when it is not.
+              if ! command -v makensis >/dev/null; then
+                [ -x "/c/Program Files (x86)/NSIS/makensis.exe" ] || choco install nsis -y --no-progress
+                export PATH="/c/Program Files (x86)/NSIS:$PATH"
+              fi
+              makensis -V2 -DVERSION="$V" -DSRC="$(cygpath -w "$PWD/build/bin/ServerDashboard.exe")" \
+                -DOUTFILE="$(cygpath -w "$PWD/dist/ServerDashboard-windows-amd64-setup.exe")" build/windows/installer/setup.nsi
               ;;
             macOS)
               # The bare executable is what the updater swaps inside the installed .app.
               cp build/bin/ServerDashboard.app/Contents/MacOS/ServerDashboard "dist/${{ matrix.asset }}"
               (cd build/bin && ditto -c -k --keepParent ServerDashboard.app ../../dist/ServerDashboard-macos-universal.zip)
+              # Disk image: the app next to a link to Applications, to drag it there.
+              mkdir -p dmg && cp -R build/bin/ServerDashboard.app dmg/ && ln -s /Applications dmg/Applications
+              hdiutil create -volname "Server Dashboard" -srcfolder dmg -ov -format UDZO dist/ServerDashboard-macos-universal.dmg
               ;;
             Linux)
               cp build/bin/ServerDashboard "dist/${{ matrix.asset }}"
               tar -C build/bin -czf dist/ServerDashboard-linux-amd64.tar.gz ServerDashboard
+              # Debian package: /opt/serverdash, a menu entry and the serverdash command.
+              pkg=deb/serverdash
+              mkdir -p $pkg/DEBIAN $pkg/opt/serverdash $pkg/usr/bin $pkg/usr/share/applications $pkg/usr/share/icons/hicolor/256x256/apps
+              install -m 755 build/bin/ServerDashboard $pkg/opt/serverdash/ServerDashboard
+              ln -s /opt/serverdash/ServerDashboard $pkg/usr/bin/serverdash
+              install -m 644 build/linux/serverdash.desktop $pkg/usr/share/applications/serverdash.desktop
+              install -m 644 build/appicon.png $pkg/usr/share/icons/hicolor/256x256/apps/serverdash.png
+              printf '%s\n' "Package: serverdash" "Version: $V" "Architecture: amd64" \
+                "Maintainer: TaNguyen <75058422+tanguyen2020@users.noreply.github.com>" \
+                "Depends: libgtk-3-0, libwebkit2gtk-4.1-0" "Section: admin" "Priority: optional" \
+                "Homepage: https://github.com/tanguyen2020/tool_server" \
+                "Description: Server Dashboard - monitor and operate Debian + Docker servers over SSH" > $pkg/DEBIAN/control
+              dpkg-deb --build --root-owner-group $pkg dist/ServerDashboard-linux-amd64.deb
               ;;
           esac
           ls -l dist
+
+      - name: Test the installer
+        run: |
+          case "$RUNNER_OS" in
+            Windows)
+              powershell -NoProfile -Command '
+                $ErrorActionPreference = "Stop"
+                $setup = Resolve-Path "dist/ServerDashboard-windows-amd64-setup.exe"
+                Start-Process $setup -ArgumentList "/S" -Wait
+                $dir = Join-Path $env:LOCALAPPDATA "Programs\ServerDashboard"
+                foreach ($f in "ServerDashboard.exe", "Uninstall.exe") { if (-not (Test-Path (Join-Path $dir $f))) { throw "missing $f" } }
+                $key = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ServerDashboard"
+                Write-Host "Installed $($key.DisplayName) $($key.DisplayVersion) in $($key.InstallLocation)"
+                if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath("Programs")) "Server Dashboard.lnk"))) { throw "no Start menu shortcut" }
+                Start-Process (Join-Path $dir "Uninstall.exe") -ArgumentList "/S", "_?=$dir" -Wait
+                if (Test-Path (Join-Path $dir "ServerDashboard.exe")) { throw "uninstall left the app" }
+                if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ServerDashboard") { throw "uninstall left the registry key" }
+                Write-Host "Install and uninstall OK"'
+              ;;
+            macOS)
+              hdiutil attach dist/ServerDashboard-macos-universal.dmg -mountpoint /tmp/sd -nobrowse
+              test -x "/tmp/sd/ServerDashboard.app/Contents/MacOS/ServerDashboard"
+              lipo -archs "/tmp/sd/ServerDashboard.app/Contents/MacOS/ServerDashboard"
+              hdiutil detach /tmp/sd
+              ;;
+            Linux)
+              sudo apt-get install -y ./dist/ServerDashboard-linux-amd64.deb
+              test -x /opt/serverdash/ServerDashboard && test -L /usr/bin/serverdash
+              test -f /usr/share/applications/serverdash.desktop
+              dpkg -s serverdash | grep -E '^(Version|Depends)'
+              sudo apt-get remove -y serverdash
+              ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:

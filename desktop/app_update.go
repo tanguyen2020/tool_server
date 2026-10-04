@@ -39,6 +39,14 @@ func (a *App) DownloadUpdate() error {
 	if !info.Available {
 		return nil
 	}
+	if !info.CanInstall {
+		// Installed system-wide: say so once per version, the user downloads it by hand.
+		if a.announced != info.Latest {
+			a.announced = info.Latest
+			runtime.EventsEmit(a.ctx, "update.available", info)
+		}
+		return nil
+	}
 	if a.upd.Staged() == info.Latest {
 		runtime.EventsEmit(a.ctx, "update.ready", info)
 		return nil

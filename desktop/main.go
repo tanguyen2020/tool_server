@@ -28,6 +28,7 @@ func main() {
 	updater.WaitForParent(os.Args[1:])
 	upd := updater.New(version)
 	upd.CleanupOld()
+	updater.RecordInstalledVersion(version) // keeps "Apps & features" right after a self-update
 
 	st, err := store.Open()
 	if err != nil {

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Server Dashboard
+Comment=Monitor and operate Debian + Docker servers over SSH
+Exec=/opt/serverdash/ServerDashboard
+Icon=serverdash
+Terminal=false
+Categories=System;Monitor;Network;
+StartupWMClass=ServerDashboard

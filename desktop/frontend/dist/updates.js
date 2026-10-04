@@ -45,6 +45,11 @@ export function initUpdates(settings, versionBtn) {
     showNotice(h('span', { class: 'spinner' }), h('span', {}, `Downloading version ${p.version}… ${pct}%`));
   });
   on('update.ready', readyNotice);
+  on('update.available', (info) => showNotice(
+    h('span', { class: 'update-dot' }),
+    h('span', {}, h('strong', {}, `Version ${info.latest}`), ' is available.'),
+    h('button', { type: 'button', class: 'btn sm primary', onclick: () => window.runtime.BrowserOpenURL(info.page) }, icon('download'), 'Download'),
+    h('button', { type: 'button', class: 'btn sm ghost icon', 'aria-label': 'Hide', onclick: () => { notice.hidden = true; } }, icon('close'))));
 }
 
 export async function openUpdates(settings) {
@@ -74,7 +79,11 @@ export async function openUpdates(settings) {
     } else {
       status.replaceChildren(icon('download'), h('span', {}, 'Version ', h('strong', {}, info.latest), ` is available (you have ${info.current}).`));
       status.classList.add('new');
-      if (info.staged === info.latest || readyInfo?.latest === info.latest) {
+      if (!info.canInstall) {
+        actions.replaceChildren(
+          h('button', { type: 'button', class: 'btn primary', onclick: () => window.runtime.BrowserOpenURL(info.page) }, icon('download'), 'Download from GitHub'),
+          h('span', { class: 'muted small' }, 'This copy is installed in a protected folder, so it cannot replace itself.'));
+      } else if (info.staged === info.latest || readyInfo?.latest === info.latest) {
         actions.replaceChildren(h('button', { type: 'button', class: 'btn primary', onclick: install }, icon('restart'), 'Restart and install'));
       } else {
         const dl = h('button', { type: 'button', class: 'btn primary' }, icon('download'), 'Download and install');
