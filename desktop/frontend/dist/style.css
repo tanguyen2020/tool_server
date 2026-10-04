@@ -915,8 +915,29 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .detail-head h1 .host-name::before { content: "· "; color: var(--muted); }
 
 /* ---------- Server list: hovered row ---------- */
-.servers-table tbody tr.srv-row td { transition: background-color 0.12s; }
-.servers-table tbody tr.srv-row:hover td { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); }
-.servers-table tbody tr.srv-row:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
-.servers-table tbody tr.srv-row.row-issue:hover td:first-child { box-shadow: inset 3px 0 0 var(--critical); }
+/* The hovered row lifts like a card: accent outline around the whole row, tint, raised with a shadow. */
+.servers-table tbody tr.srv-row { transition: transform 0.15s, filter 0.15s; }
+.servers-table tbody tr.srv-row td { transition: background-color 0.12s, box-shadow 0.12s; }
+.servers-table tbody tr.srv-row:hover {
+  position: relative; z-index: 2;
+  transform: translateY(-2px);
+  filter: drop-shadow(0 6px 12px color-mix(in srgb, var(--accent) 28%, transparent));
+}
+.servers-table tbody tr.srv-row:hover td {
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+.servers-table tbody tr.srv-row:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+  border-radius: 6px 0 0 6px;
+}
+.servers-table tbody tr.srv-row.row-issue:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--critical), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+.servers-table tbody tr.srv-row:hover td:last-child {
+  box-shadow: inset -1px 0 0 var(--accent), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+  border-radius: 0 6px 6px 0;
+}
 .servers-table tbody tr.srv-row:hover .srv-title { color: var(--accent-ink); }
+.servers-table tbody tr.srv-row:active { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .servers-table tbody tr.srv-row, .servers-table tbody tr.srv-row:hover { transition: none; transform: none; } }
