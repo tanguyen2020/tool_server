@@ -1060,7 +1060,9 @@ function detailView(id, root) {
     setMeter(cpu.bar, host?.cpu);
     const split = host?.cpuSplit;
     const notable = split ? [split.iowait >= 5 && `iowait ${Math.round(split.iowait)}%`, split.steal >= 5 && `steal ${Math.round(split.steal)}%`] : [];
-    cpu.sub.textContent = host ? [`${host.cores} cores`, `load ${host.load.map((v) => v.toFixed(2)).join(' ')}`, ...notable].filter(Boolean).join(' · ') : '';
+    // The core count sits next to the label: load and container CPU only make sense against it.
+    cpu.lbl.replaceChildren('CPU', ...(host?.cores ? [h('span', { class: 'stat-badge', title: 'Logical CPUs (threads) of the server' }, `${host.cores} cores`)] : []));
+    cpu.sub.textContent = host ? [`load ${host.load.map((v) => v.toFixed(2)).join(' ')}`, ...notable].filter(Boolean).join(' · ') : '';
     mem.value.textContent = fmtPct(host?.mem.pct);
     setMeter(mem.bar, host?.mem.pct);
     mem.sub.textContent = host
@@ -1104,7 +1106,7 @@ function detailView(id, root) {
     rebootBtn.disabled = rebooting || snap.status !== 'online';
     setLabel(rebootBtn, 'power', rebooting ? 'Rebooting…' : 'Reboot');
     if (rebooting) chipSlot.firstChild.title = `Reboot requested at ${fmtTime(snap.rebootingSince)} — waiting for the server to come back`;
-    meta.textContent = [`${c.username}@${c.host}:${c.port}`, host?.hostname, host?.os, host && `kernel ${host.kernel}`, host?.cpuModel,
+    meta.textContent = [`${c.username}@${c.host}:${c.port}`, host?.hostname, host?.os, host && `kernel ${host.kernel}`, host?.cpuModel && `${host.cpuModel} (${host.cores} cores)`,
       host && `up ${fmtUptime(host.uptime)}`, snap.updatedAt && `updated ${fmtTime(snap.updatedAt)}`].filter(Boolean).join(' · ');
     if (refreshing && snap.updatedAt > refreshing.since) {
       if (snap.status === 'online' || snap.status === 'rebooting') finishRefresh(true);

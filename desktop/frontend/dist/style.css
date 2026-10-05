@@ -194,6 +194,10 @@ textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; box-shadow: var(--shadow-sm); }
 .stat-label { color: var(--muted); font-size: 12px; }
+.stat-label .stat-badge {
+  margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  color: var(--ink); background: color-mix(in srgb, var(--ink) 9%, transparent); border: 1px solid var(--border);
+}
 .stat-value { font-size: 26px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
 .stat-sub { color: var(--ink-2); font-size: 12px; }
 
