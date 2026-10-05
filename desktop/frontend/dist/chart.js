@@ -85,13 +85,17 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redrawAll)
 new MutationObserver(redrawAll).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // Time-series line chart: single Y axis, crosshair + tooltip.
-// yMax: number or function (null = auto). ref: optional dashed reference line { value: () => number, label: () => string }.
+// yMax: number or function (null = auto). Auto scale can be bounded: minMax (smallest top, so near-idle noise is
+// not blown up) and maxCap (never above, e.g. 100 for percentages).
+// ref: optional dashed reference line { value: () => number, label: () => string }.
 export class TimeChart {
-  constructor(parent, { series, yMax = null, format = String, bytes = false, ref = null }) {
+  constructor(parent, { series, yMax = null, minMax = 0, maxCap = Infinity, format = String, bytes = false, ref = null }) {
     this.series = series;
     this.bytes = bytes;
     this.ref = ref;
     this.yMax = yMax;
+    this.minMax = minMax;
+    this.maxCap = maxCap;
     this.format = format;
     this.data = [];
     this.events = [];
@@ -148,7 +152,7 @@ export class TimeChart {
     const peak = Math.max(0, ...pts.flatMap((p) => this.series.map((s) => p[s.key] ?? 0)));
     const fixed = typeof this.yMax === 'function' ? this.yMax() : this.yMax;
     const refValue = this.ref?.value() ?? null;
-    const max = fixed || niceMax(Math.max(peak, refValue ?? 0) * 1.1, this.bytes);
+    const max = fixed || Math.min(this.maxCap, Math.max(this.minMax, niceMax(Math.max(peak, refValue ?? 0) * 1.1, this.bytes)));
     const y = (v) => pad.t + ph - (Math.min(v, max) / max) * ph;
 
     drawYGrid(ctx, { pad, width, y, max, format: this.format });

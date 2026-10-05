@@ -963,3 +963,6 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 }
 :is(.containers-table, .services-table) tbody tr:hover :is(.c-name, .svc-name) { color: var(--accent-ink); }
 .files-table tbody tr:hover .file-name { color: var(--accent-ink); }
+
+/* ---------- Small toggle in a panel title (CPU axis) ---------- */
+.panel h3 .right .scale-tabs .tab { height: 24px; font-size: 12px; padding: 0 9px; }

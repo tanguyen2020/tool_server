@@ -821,6 +821,15 @@ function detailView(id, root) {
   const topP = topProcessesPanel(id, (cid) => state.snaps.get(id)?.docker?.containers?.find((c) => c.id === cid)?.name);
   const dfP = dockerDiskPanel(id);
   let lastHost = null; // read by the dynamic axis max / reference line below
+  // CPU axis: Auto fits the data (0–5% on a quiet server, up to 0–100%); 0–100% shows the share of the whole CPU.
+  let cpuFull = getPref('cpuScale') === 'full';
+  const scaleBtns = [['auto', 'Auto'], ['full', '0–100%']].map(([k, label]) => h('button', {
+    type: 'button', class: 'tab', 'data-scale': k, title: k === 'auto' ? 'Fit the axis to the data' : 'Always show the whole 0–100% range',
+    onclick: () => { cpuFull = k === 'full'; setPref('cpuScale', k); syncScale(); cpuChart.draw(); },
+  }, label));
+  const syncScale = () => scaleBtns.forEach((b) => b.classList.toggle('active', (b.dataset.scale === 'full') === cpuFull));
+  cpuP.right.append(h('div', { class: 'tabs scale-tabs', role: 'group', 'aria-label': 'CPU axis' }, scaleBtns));
+  syncScale();
   const cpuChart = new TimeChart(cpuP.body, {
     series: [
       { key: 'user', label: 'User', color: '--cat-1' },
@@ -828,8 +837,10 @@ function detailView(id, root) {
       { key: 'iowait', label: 'I/O wait', color: '--cat-3' },
       { key: 'steal', label: 'Steal', color: '--cat-4' },
     ],
-    yMax: 100,
-    format: (v) => `${Math.round(v)}%`,
+    yMax: () => (cpuFull ? 100 : null),
+    minMax: 5,
+    maxCap: 100,
+    format: (v) => (v < 10 && v % 1 ? `${v.toFixed(v * 10 % 1 ? 2 : 1)}%` : `${Math.round(v)}%`),
   });
   const loadChart = new TimeChart(loadP.body, {
     series: [
