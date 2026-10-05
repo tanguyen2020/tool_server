@@ -35,6 +35,8 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
 - **Docker disk usage** (on demand): `docker system df` on the Docker tab.
 - **Threshold alerts** (button *Alerts*): CPU, memory and I/O wait sustained above a threshold, disk or inode usage above a threshold,
   and OOM kills. Defaults: 90 / 90 / 90 / 30% sustained for 5 minutes; an alert resolves 5 points below its threshold.
+- **Container CPU** is shown as % of the whole server (0–100, like the server CPU; Docker itself reports % of one
+  core, up to 100 × cores); hover a value to see the cores in use.
 - **Container metrics (Grafana style):** CPU, memory, **network** (total / received / sent) and **disk I/O** (total / read / write)
   per container over time, with a sortable Last / Max / Min legend; the 8 largest series get a color, the rest are gray context lines;
   hover or click a line/row to highlight it; optional **grouping by compose project**. Network and disk numbers come from exact

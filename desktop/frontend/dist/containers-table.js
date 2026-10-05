@@ -62,7 +62,7 @@ function loadPrefs() {
   }
 }
 
-function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline, hostMemTotal }) {
+function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline, hostMemTotal, hostCores }) {
   const chipCell = h('td');
   const nameEl = h('div', { class: 'c-name' });
   const imageEl = h('div', { class: 'c-image' });
@@ -147,7 +147,11 @@ function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline
       !ports.published.length && !ports.internal.length ? h('span', { class: 'muted' }, '–') : '',
     );
 
-    cpuText.textContent = running && c.cpu != null ? fmtCpu(c.cpu) : '–';
+    // c.cpu is Docker's % of one core; shown as % of the whole server (same scale as the server CPU).
+    const cores = hostCores?.();
+    const cpu = c.cpu != null && cores ? c.cpu / cores : c.cpu;
+    cpuText.textContent = running && cpu != null ? fmtCpu(cpu) : '–';
+    cpuText.title = running && c.cpu != null ? `${(c.cpu / 100).toFixed(2)} of ${cores || '?'} cores in use` : '';
     // Docker reports the host's RAM as the limit when none is set: only show real limits.
     const total = hostMemTotal();
     const limited = c.memLimit && total && c.memLimit < total * 0.98;
@@ -231,7 +235,7 @@ export function containersPanel(opts) {
 
   const COLS = [
     ['state', 'State'], ['name', 'Name / Image'], [null, 'Health'], [null, 'Status'], [null, 'Ports'],
-    ['cpu', 'CPU', '% of one core; the line shows the last 30 minutes'], ['mem', 'RAM', 'Usage; the line shows the last 30 minutes'],
+    ['cpu', 'CPU', '% of the server\'s total CPU (all cores); hover a value for the cores in use. The line shows the last 30 minutes'], ['mem', 'RAM', 'Usage; the line shows the last 30 minutes'],
     ['restarts', 'Restarts'], [null, 'Net I/O'], [null, 'Block I/O'], [null, 'PIDs'], [null, ''],
   ];
   const heads = COLS.map(([key, label, title], i) => {

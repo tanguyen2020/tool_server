@@ -137,7 +137,7 @@ export function containerMetricsTab({ projectOf }) {
     net.setData(src.t, grouped(combine(src.netRx, src.netTx, prefs.net)));
     io.setData(src.t, grouped(combine(src.blkRead, src.blkWrite, prefs.io)));
     const what = prefs.group ? 'series' : 'containers';
-    cpuP.right.textContent = `${cpu.stats.length} ${what} · % of one core · top 8 colored`;
+    cpuP.right.textContent = `${cpu.stats.length} ${what} · % of server CPU · top 8 colored`;
     memP.right.textContent = `${mem.stats.length} ${what} · top 8 colored`;
     netNote.textContent = `${net.stats.length} ${what} · host-network containers excluded`;
     ioNote.textContent = `${io.stats.length} ${what}`;

@@ -69,6 +69,10 @@ function onSnapshot(snap) {
 const CONTAINER_METRICS = [['cpu', 'cpu'], ['mem', 'memUsed'], ['netRx', 'netRx'], ['netTx', 'netTx'], ['blkRead', 'blkRead'], ['blkWrite', 'blkWrite']];
 const emptyContainerHistory = () => ({ t: [], ...Object.fromEntries(CONTAINER_METRICS.map(([k]) => [k, new Map()])) });
 
+// Docker reports container CPU in % of ONE core (a busy container on 16 cores reads up to 1600%).
+// The app shows it as % of the whole server, on the same 0–100 scale as the server CPU.
+const cpuOfServer = (pctOfCore, cores) => (pctOfCore == null || !cores ? pctOfCore : pctOfCore / cores);
+
 function pushContainerHistory(snap) {
   if (snap.status !== 'online' || !snap.docker?.containers) return;
   let ch = state.containerHistory.get(snap.id);
@@ -82,7 +86,7 @@ function pushContainerHistory(snap) {
   for (const [k] of CONTAINER_METRICS) for (const arr of ch[k].values()) arr.push(null);
   for (const c of snap.docker.containers) {
     for (const [k, field] of CONTAINER_METRICS) {
-      const v = c[field];
+      const v = k === 'cpu' ? cpuOfServer(c[field], snap.host?.cores) : c[field];
       if (v == null) continue;
       let arr = ch[k].get(c.name);
       if (!arr) {
@@ -880,6 +884,7 @@ function detailView(id, root) {
     },
     history: () => state.containerHistory.get(id),
     hostMemTotal: () => state.snaps.get(id)?.host?.mem.total,
+    hostCores: () => state.snaps.get(id)?.host?.cores,
   });
 
   // ---- Container metrics tab
@@ -1044,7 +1049,10 @@ function detailView(id, root) {
       metrics.setData(state.containerHistory.get(id) || emptyContainerHistory());
     } else if (stored) {
       for (const chart of [cpuChart, loadChart, memChart, ioChart, netChart]) chart.setData(stored.host);
-      metrics.setData({ t: stored.times, ...Object.fromEntries(CONTAINER_METRICS.map(([k]) => [k, new Map(Object.entries(stored[k] || {}))])) });
+      // Stored container CPU is in Docker's % of one core: rescale it like the live values.
+      const cores = snap.host?.cores;
+      metrics.setData({ t: stored.times, ...Object.fromEntries(CONTAINER_METRICS.map(([k]) => [k, new Map(Object.entries(stored[k] || {})
+        .map(([name, vals]) => [name, k === 'cpu' ? vals.map((v) => cpuOfServer(v, cores)) : vals]))])) });
     }
     containers.update(snap);
   };
