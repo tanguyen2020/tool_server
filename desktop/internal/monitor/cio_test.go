@@ -67,12 +67,12 @@ func TestContainerRates(t *testing.T) {
 	prev := &raw{at: t0}
 	containerRates(mk(), prev, nil,
 		map[string][2]float64{idA: {1000, 2000}},
-		map[string][2]float64{idA: {10000, 20000}})
+		map[string][2]float64{idA: {10000, 20000}}, nil)
 	cur := &raw{at: t0.Add(2 * time.Second)}
 	d := mk()
 	containerRates(d, cur, prev,
 		map[string][2]float64{idA: {3000, 2000}},
-		map[string][2]float64{idA: {14000, 20000}})
+		map[string][2]float64{idA: {14000, 20000}}, nil)
 	a, b := d.Containers[0], d.Containers[1]
 	if a.BlkRead == nil || *a.BlkRead != 1000 || *a.BlkWrite != 0 || *a.NetRx != 2000 || *a.NetTx != 0 {
 		t.Fatalf("exact rates expected for a: %v %v %v %v", a.BlkRead, a.BlkWrite, a.NetRx, a.NetTx)
@@ -84,7 +84,7 @@ func TestContainerRates(t *testing.T) {
 	// A counter reset (container restarted) must not produce a rate.
 	cur2 := &raw{at: t0.Add(4 * time.Second)}
 	d2 := mk()
-	containerRates(d2, cur2, cur, map[string][2]float64{idA: {10, 10}}, map[string][2]float64{idA: {10, 10}})
+	containerRates(d2, cur2, cur, map[string][2]float64{idA: {10, 10}}, map[string][2]float64{idA: {10, 10}}, nil)
 	if d2.Containers[0].BlkRead != nil || d2.Containers[0].NetRx != nil {
 		t.Fatalf("reset counters must give no rate: %+v", d2.Containers[0])
 	}

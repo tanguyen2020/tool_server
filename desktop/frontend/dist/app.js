@@ -1,5 +1,6 @@
 import { h, toast, fmtBytes, fmtRate, fmtPct, fmtUptime, fmtTime, meter, setMeter, statusChip, level } from './util.js';
 import { TimeChart } from './chart.js';
+import { SeriesPanel } from './series-chart.js';
 import { initLogs, openLogs, onLogsSnapshot } from './logs.js';
 import { initTerminals } from './terminal.js';
 import { initDock, setDockServer, closeDockServer, openTerminalFor, openTaskFor, pasteToTerminal, dockTerminalCount } from './dock.js';
@@ -45,6 +46,9 @@ function pointOf(snap) {
     user: c?.user ?? null, system: c?.system ?? null, iowait: c?.iowait ?? null, steal: c?.steal ?? null,
     load1: h.load[0], load5: h.load[1], load15: h.load[2],
     memUsed: h.mem.used, memCache: h.mem.cache ?? 0, ioRead: h.ioRead, ioWrite: h.ioWrite,
+    swapUsed: h.swap.used, swapIn: h.swapIn ?? null, swapOut: h.swapOut ?? null,
+    psiCpu: h.psi?.cpu ?? null, psiMem: h.psi?.mem ?? null, psiMemFull: h.psi?.memFull ?? null, psiIo: h.psi?.io ?? null, psiIoFull: h.psi?.ioFull ?? null,
+    ioUtil: h.ioUtil ?? null, ioAwait: h.ioAwait ?? null, tcpInUse: h.tcp?.inUse ?? null, tcpTimeWait: h.tcp?.timeWait ?? null,
   };
 }
 
@@ -66,7 +70,8 @@ function onSnapshot(snap) {
 
 // Per-container CPU/RAM over time; every series array stays aligned with `t` (null = no sample).
 // Container metric -> snapshot field. Every series array stays aligned with `t` (null = no sample).
-const CONTAINER_METRICS = [['cpu', 'cpu'], ['mem', 'memUsed'], ['netRx', 'netRx'], ['netTx', 'netTx'], ['blkRead', 'blkRead'], ['blkWrite', 'blkWrite']];
+const CONTAINER_METRICS = [['cpu', 'cpu'], ['mem', 'memUsed'], ['netRx', 'netRx'], ['netTx', 'netTx'], ['blkRead', 'blkRead'], ['blkWrite', 'blkWrite'],
+  ['memLimit', 'memLimitPct'], ['throttled', 'throttled']];
 const emptyContainerHistory = () => ({ t: [], ...Object.fromEntries(CONTAINER_METRICS.map(([k]) => [k, new Map()])) });
 
 // Docker reports container CPU in % of ONE core (a busy container on 16 cores reads up to 1600%).
@@ -558,6 +563,31 @@ function statPanel(cls, title) {
   return { el, body, right };
 }
 
+const fmtShare = (v) => `${+v.toFixed(v < 10 ? 2 : 1)}%`;
+const fmtMs = (v) => `${+v.toFixed(v < 10 ? 2 : 0)} ms`;
+const fmtCount = (v) => (v >= 10000 ? `${(v / 1000).toFixed(0)}k` : String(Math.round(v)));
+function fmtDays(d) {
+  if (d < 1) return `~${Math.max(1, Math.round(d * 24))} h`;
+  if (d < 60) return `~${Math.round(d)} day${Math.round(d) === 1 ? '' : 's'}`;
+  return 'more than 2 months';
+}
+// One line under a disk: where its trend leads (history.Forecast, or undefined before 6 h of data).
+// Disk space barely moves: keep only the minutes that have a sample, so gaps (app closed) do not break the lines.
+function diskSeries(times, disks) {
+  const keep = times.map((_, i) => Object.values(disks || {}).some((v) => v[i] != null));
+  return [times.filter((_, i) => keep[i]), new Map(Object.entries(disks || {}).map(([m, v]) => [m, v.filter((_, i) => keep[i])]))];
+}
+function forecastLine(f) {
+  if (!f) return h('span', { class: 'disk-forecast muted' }, 'Trend: needs 6 h of history');
+  if (f.daysLeft != null) {
+    const tone = f.daysLeft < 7 ? 'critical' : f.daysLeft < 30 ? 'warning' : '';
+    return h('span', { class: `disk-forecast ${tone}`, title: `Straight-line trend over the last ${Math.round(f.spanHours)} h` },
+      `Full in ${fmtDays(f.daysLeft)} · growing ${fmtBytes(f.perDay)}/day`);
+  }
+  return h('span', { class: 'disk-forecast muted', title: `Trend over the last ${Math.round(f.spanHours)} h` },
+    f.perDay < -(1 << 20) ? `Shrinking ${fmtBytes(-f.perDay)}/day` : 'Stable — not filling up');
+}
+
 const COMPOSE_LABEL = { update: 'pull & recreate', up: 'up', restart: 'restart', stop: 'stop', start: 'start', down: 'down' };
 const COMPOSE_ASK = {
   update: 'Pull newer images and recreate the containers that changed?\n\nRecreated containers restart (a short interruption).',
@@ -782,7 +812,7 @@ function detailView(id, root) {
     try {
       const events = await call('Events', id, minutes);
       if (seq !== eventsSeq) return;
-      for (const chart of [cpuChart, loadChart, memChart, ioChart, netChart]) chart.setEvents(events);
+      for (const chart of hostCharts) chart.setEvents(events);
       metrics.setEvents(events);
     } catch (e) {
       toast(`Could not load container events: ${e.message}`, true);
@@ -801,6 +831,9 @@ function detailView(id, root) {
     if (next !== 'live') {
       loadStored();
       storedTimer = setInterval(loadStored, 60000);
+    } else {
+      loadSpaceLive();
+      storedTimer = setInterval(loadSpaceLive, 60000);
     }
     clearInterval(eventsTimer);
     loadEvents();
@@ -816,6 +849,12 @@ function detailView(id, root) {
   const netP = statPanel('span-6', 'Network (excluding docker/veth)');
   const diskP = statPanel('span-6', 'Disks');
   const coresP = statPanel('span-6', 'CPU per core');
+  const swapP = statPanel('span-6', 'Swap activity');
+  const psiP = statPanel('span-6', 'Pressure stall (PSI)');
+  const latP = statPanel('span-6', 'Disk latency');
+  const utilP = statPanel('span-6', 'Disk utilization');
+  const tcpP = statPanel('span-6', 'TCP connections');
+  const spaceP = statPanel('span-6', 'Disk space over time');
   const maintP = maintenancePanel(id, { onReboot: () => rebootServer(id), onUpgrade: () => upgradePackages(id) });
   const duP = diskExplorerPanel(id, { mounts: () => state.snaps.get(id)?.host?.disks });
   const topP = topProcessesPanel(id, (cid) => state.snaps.get(id)?.docker?.containers?.find((c) => c.id === cid)?.name);
@@ -875,6 +914,71 @@ function detailView(id, root) {
     format: (v) => fmtRate(v),
     bytes: true,
   });
+  const swapChart = new TimeChart(swapP.body, {
+    series: [{ key: 'swapIn', label: 'Swap in (read back)', color: '--series-1' }, { key: 'swapOut', label: 'Swap out (written)', color: '--series-3' }],
+    minMax: 256 * 1024, // no swap traffic: a readable 0–256 KiB/s axis instead of repeated "1 B/s"
+    format: (v) => fmtRate(v),
+    bytes: true,
+  });
+  const swapNote = h('div', { class: 'panel-foot' });
+  swapP.body.append(swapNote);
+  // PSI "some": share of time at least one task waited for the resource.
+  const psiChart = new TimeChart(psiP.body, {
+    series: [
+      { key: 'psiCpu', label: 'CPU', color: '--cat-1' },
+      { key: 'psiMem', label: 'Memory', color: '--cat-2' },
+      { key: 'psiIo', label: 'I/O', color: '--cat-3' },
+    ],
+    minMax: 5,
+    maxCap: 100,
+    format: fmtShare,
+  });
+  const psiNote = h('div', { class: 'panel-foot' });
+  psiP.body.append(psiNote);
+  psiP.right.textContent = '% of time tasks were waiting';
+  const latChart = new TimeChart(latP.body, {
+    series: [{ key: 'ioAwait', label: 'Average wait per request', color: '--cat-1' }],
+    minMax: 2,
+    format: fmtMs,
+  });
+  latP.right.textContent = 'all disks · SSD usually < 5 ms';
+  const utilChart = new TimeChart(utilP.body, {
+    series: [{ key: 'ioUtil', label: 'Busiest disk', color: '--cat-1' }],
+    minMax: 10,
+    maxCap: 100,
+    format: fmtShare,
+  });
+  utilP.right.textContent = '% of time busy · 100% = saturated';
+  const tcpChart = new TimeChart(tcpP.body, {
+    series: [{ key: 'tcpInUse', label: 'Open', color: '--cat-1' }, { key: 'tcpTimeWait', label: 'TIME_WAIT', color: '--cat-2' }],
+    minMax: 10,
+    format: fmtCount,
+  });
+  tcpP.right.textContent = 'sockets, IPv4 + IPv6';
+  const spaceChart = new SeriesPanel(spaceP.body, {
+    format: (v) => `${+v.toFixed(1)}%`, maxCap: 100, label: 'Used space per mount over time',
+    emptyText: 'No disk history yet — it is recorded every minute while the app runs',
+  });
+  const hostCharts = [cpuChart, loadChart, memChart, ioChart, netChart, swapChart, psiChart, latChart, utilChart, tcpChart];
+
+  // Disk space changes slowly: Live shows the stored last 24 h; the trend says when a disk fills up.
+  let spaceLive = null;
+  let forecasts = new Map(); // mount -> history.Forecast
+  async function loadSpaceLive() {
+    try {
+      const res = await call('History', id, 1440);
+      spaceLive = { t: res.times, disks: res.disks };
+      update();
+    } catch { /* the history database is optional */ }
+  }
+  async function loadForecast() {
+    try {
+      forecasts = new Map((await call('DiskForecast', id)).map((f) => [f.mount, f]));
+      update();
+    } catch { /* idem */ }
+  }
+  loadForecast();
+  const forecastTimer = setInterval(loadForecast, 10 * 60000);
 
   // ---- Containers tab
   const containers = containersPanel({
@@ -911,7 +1015,8 @@ function detailView(id, root) {
 
   const panes = {
     server: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-server', 'aria-labelledby': 'tab-server' },
-      cpuP.el, loadP.el, memP.el, ioP.el, netP.el, diskP.el, maintP.el, coresP.el, topP.el, duP.el),
+      cpuP.el, loadP.el, memP.el, swapP.el, psiP.el, netP.el, ioP.el, latP.el, utilP.el, tcpP.el, diskP.el, spaceP.el,
+      maintP.el, coresP.el, topP.el, duP.el),
     services: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-services', 'aria-labelledby': 'tab-services' }, services.el),
     files: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-files', 'aria-labelledby': 'tab-files' }, files.el),
     network: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-network', 'aria-labelledby': 'tab-network' }, ...network.panels),
@@ -1013,9 +1118,12 @@ function detailView(id, root) {
     duP.update();
 
     const alerts = snap.status === 'online' ? snap.alerts || [] : [];
-    alertBox.hidden = !alerts.length;
+    const filling = [...forecasts.values()].filter((f) => f.daysLeft != null && f.daysLeft < 7);
+    alertBox.hidden = !alerts.length && !filling.length;
     alertBox.replaceChildren(
       ...alerts.map((a) => h('span', { class: 'chip critical' }, `${a.title} · ${a.detail} · since ${fmtTime(a.since)}`)),
+      ...filling.map((f) => h('span', { class: `chip ${f.daysLeft < 2 ? 'critical' : 'warning'}` },
+        `Disk ${f.mount} full in ${fmtDays(f.daysLeft)} · +${fmtBytes(f.perDay)}/day`)),
       h('button', { type: 'button', class: 'btn sm ghost', onclick: openAlertSettings }, 'Thresholds…'),
     );
 
@@ -1026,7 +1134,17 @@ function detailView(id, root) {
         h('div', { class: 'meter-row' }, h('span', {}, `${d.mount} `, h('span', { class: 'muted' }, d.fs)),
           h('span', { class: 'num' }, `${fmtBytes(d.used)} / ${fmtBytes(d.size)} · ${fmtPct(d.pct, 0)}`)),
         meter(d.pct),
-        h('div', { class: `disk-inodes ${level(d.inodePct)}` }, d.inodePct == null ? 'inodes: n/a (no fixed inode table)' : `inodes ${fmtPct(d.inodePct, 0)} used`))));
+        h('div', { class: 'disk-sub' },
+          h('span', { class: `disk-inodes ${level(d.inodePct)}` }, d.inodePct == null ? 'inodes: n/a (no fixed inode table)' : `inodes ${fmtPct(d.inodePct, 0)} used`),
+          forecastLine(forecasts.get(d.mount))))));
+      swapP.right.textContent = host.swap.total ? `${fmtBytes(host.swap.used)} / ${fmtBytes(host.swap.total)} used` : 'no swap';
+      swapNote.textContent = host.swap.total
+        ? 'Steady swap-in means the server is short of RAM and waits for the disk.'
+        : 'This server has no swap: when RAM runs out, the kernel kills a process (OOM) instead of slowing down.';
+      const psi = host.psi;
+      psiNote.textContent = !psi
+        ? 'Not reported by this kernel (needs Linux 4.20+; some distributions need psi=1 on the kernel command line).'
+        : `Memory full ${fmtShare(psi.memFull ?? 0)} · I/O full ${fmtShare(psi.ioFull ?? 0)} (every task stalled at once). Above ~10% the server feels slow.`;
       memP.right.textContent = `${fmtBytes(host.mem.total)} total`;
       memInfo.replaceChildren(...inlineKV([
         ['Available', fmtBytes(host.mem.available)],
@@ -1037,12 +1155,13 @@ function detailView(id, root) {
       ioP.right.textContent = `${host.diskIO?.length || 0} disks`;
       ioDevices.replaceChildren(host.diskIO?.length
         ? h('table', { class: 'mini-table' },
-          h('thead', {}, h('tr', {}, ['Device', 'Read', 'Write', 'IOPS', 'Utilization'].map((x, i) => h('th', { class: i ? 'num' : '' }, x)))),
+          h('thead', {}, h('tr', {}, ['Device', 'Read', 'Write', 'IOPS', 'Latency', 'Utilization'].map((x, i) => h('th', { class: i ? 'num' : '' }, x)))),
           h('tbody', {}, host.diskIO.map((d) => {
             const util = meter(d.util);
             util.classList.add('mini-meter');
             return h('tr', {}, h('td', {}, d.name), h('td', { class: 'num' }, fmtRate(d.readBps)), h('td', { class: 'num' }, fmtRate(d.writeBps)),
-              h('td', { class: 'num' }, d.iops.toFixed(0)), h('td', { class: 'num' }, fmtPct(d.util, 0), util));
+              h('td', { class: 'num' }, d.iops.toFixed(0)), h('td', { class: 'num' }, d.await == null ? '–' : fmtMs(d.await)),
+              h('td', { class: 'num' }, fmtPct(d.util, 0), util));
           })))
         : h('div', { class: 'muted' }, 'Collecting…'));
       coresP.right.textContent = `${host.cores} cores`;
@@ -1056,10 +1175,14 @@ function detailView(id, root) {
     // Both tabs keep receiving data, so switching tabs shows full charts immediately.
     if (range === 'live') {
       const hist = state.history.get(id) || [];
-      for (const chart of [cpuChart, loadChart, memChart, ioChart, netChart]) chart.setData(hist);
+      for (const chart of hostCharts) chart.setData(hist);
+      if (spaceLive) spaceChart.setData(...diskSeries(spaceLive.t, spaceLive.disks));
+      spaceP.right.textContent = 'used % per mount · last 24 h';
       metrics.setData(state.containerHistory.get(id) || emptyContainerHistory());
     } else if (stored) {
-      for (const chart of [cpuChart, loadChart, memChart, ioChart, netChart]) chart.setData(stored.host);
+      for (const chart of hostCharts) chart.setData(stored.host);
+      spaceChart.setData(...diskSeries(stored.times, stored.disks));
+      spaceP.right.textContent = 'used % per mount';
       // Stored container CPU is in Docker's % of one core: rescale it like the live values.
       const cores = snap.host?.cores;
       metrics.setData({ t: stored.times, ...Object.fromEntries(CONTAINER_METRICS.map(([k]) => [k, new Map(Object.entries(stored[k] || {})
@@ -1077,13 +1200,14 @@ function detailView(id, root) {
     show: () => topP.setActive(tab === 'server'),
     destroy: () => {
       clearInterval(storedTimer);
+      clearInterval(forecastTimer);
       topP.destroy();
       clearInterval(eventsTimer);
       metrics.destroy();
       services.destroy();
       files.destroy();
       network.destroy();
-      [cpuChart, loadChart, memChart, ioChart, netChart].forEach((c) => c.destroy());
+      [...hostCharts, spaceChart].forEach((c) => c.destroy());
     },
   };
 }

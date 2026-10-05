@@ -20,10 +20,15 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
   new metrics at once (shows *Refreshing…*, then *✓ Updated* and highlights the updated time) and three tabs:
   **Server**, **Containers** (the table, for day-to-day operations) and **Container metrics** (charts and Docker disk usage).
 - **Servers:** online/offline; CPU split into user / system / I/O wait / steal; load average vs core count; memory used / cache / available,
-  swap activity and OOM kills; disk I/O (throughput, IOPS, utilization per disk); disk space and inode usage; network; per-core CPU;
+  swap activity and OOM kills; disk I/O (throughput, IOPS, latency and utilization per disk); disk space and inode usage; network; per-core CPU;
+  **pressure stall (PSI)** for CPU / memory / I/O (`/proc/pressure`, Linux 4.20+); **disk latency** (ms per request) and
+  **utilization** of the busiest disk; **TCP connections** (open and TIME_WAIT, `/proc/net/sockstat`); **disk space over time**;
   charts with a time range picker: **Live 30m** (5-second samples) or **1h / 6h / 24h / 7d** from the on-disk history.
 - **History** stored in `%AppData%\ServerDashboard\history.db` (bbolt): 1-minute averages, kept 7 days, survives restarts.
   Data is only recorded while the app is running; gaps show as breaks in the charts.
+- **Disk full forecast:** a straight-line trend of each mount over the last 3 days (needs 6 h of history) says how fast
+  it grows and when it will be full (*Full in ~6 days · growing 4.5 GiB/day* under each disk). Below 7 days the server page
+  shows a warning and a notification is sent (checked hourly, at most once a day per disk).
 - **Maintenance** (checked hourly): reboot required (newer kernel installed or `/var/run/reboot-required`), pending updates
   and security updates (`apt-get -s`, read-only), age of the package lists. Shown on the server card and the Server tab.
 - **Reboot server** (`⏻ Reboot` in the server header, right-click a server card, or *Reboot now…* when a reboot is required):
@@ -37,7 +42,8 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
   and OOM kills. Defaults: 90 / 90 / 90 / 30% sustained for 5 minutes; an alert resolves 5 points below its threshold.
 - **Container CPU** is shown as % of the whole server (0–100, like the server CPU; Docker itself reports % of one
   core, up to 100 × cores); hover a value to see the cores in use.
-- **Container metrics (Grafana style):** CPU, memory, **network** (total / received / sent) and **disk I/O** (total / read / write)
+- **Container metrics (Grafana style):** CPU, **CPU throttling** (% of time slices held back by `--cpus`, from cgroup
+  `cpu.stat`), memory, **memory vs limit** (% of `--memory`; 100% = OOM kill; containers with a limit only), **network** (total / received / sent) and **disk I/O** (total / read / write)
   per container over time, with a sortable Last / Max / Min legend; the 8 largest series get a color, the rest are gray context lines;
   hover or click a line/row to highlight it; optional **grouping by compose project**. Network and disk numbers come from exact
   counters (`/proc/<pid>/net/dev`, cgroup v2 `io.stat`), falling back to `docker stats`; host-network containers are excluded from network.

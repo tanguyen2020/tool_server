@@ -13,10 +13,14 @@ const lastValue = (arr) => {
 };
 
 // Multi-series time chart with a sortable legend table (Name / Last / Max / Min), Grafana style.
+// minMax / maxCap bound the auto scale like TimeChart; emptyText replaces "No running containers".
 export class SeriesPanel {
-  constructor(parent, { format, bytes = false, label }) {
+  constructor(parent, { format, bytes = false, label, minMax = 0, maxCap = Infinity, emptyText = 'No running containers' }) {
     this.format = format;
     this.bytes = bytes;
+    this.minMax = minMax;
+    this.maxCap = maxCap;
+    this.emptyText = emptyText;
     this.times = [];
     this.events = [];
     this.series = new Map(); // name -> values aligned with times
@@ -181,7 +185,7 @@ export class SeriesPanel {
     const hasData = this.times.length >= 2 && this.stats.length > 0;
     this.empty.hidden = hasData;
     this.empty.textContent = this.times.length < 2 ? 'Collecting data…'
-      : this.series.size ? 'No running containers' : 'No data recorded in this range yet';
+      : this.series.size || this.emptyText !== 'No running containers' ? this.emptyText : 'No data recorded in this range yet';
     this.wrap.parentElement.hidden = !hasData;
     if (!hasData) return;
 
@@ -190,7 +194,7 @@ export class SeriesPanel {
     const pw = width - PAD.l - PAD.r;
     const ph = height - PAD.t - PAD.b;
     const peak = Math.max(0, ...this.stats.map((s) => s.max));
-    const max = niceMax(peak * 1.1, this.bytes);
+    const max = Math.min(this.maxCap, Math.max(this.minMax, niceMax(peak * 1.1, this.bytes)));
     const y = (v) => PAD.t + ph - (Math.min(v, max) / max) * ph;
     const t0 = this.times[0];
     const t1 = this.times.at(-1);

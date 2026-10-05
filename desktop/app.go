@@ -87,6 +87,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	go a.mon.Run(runCtx)
 	go a.autoUpdate(runCtx)
+	go a.watchDiskForecasts(runCtx)
 }
 
 func (a *App) shutdown(context.Context) {

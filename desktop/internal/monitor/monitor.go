@@ -45,6 +45,19 @@ type Point struct {
 	MemCache float64  `json:"memCache"`
 	IORead   *float64 `json:"ioRead"`
 	IOWrite  *float64 `json:"ioWrite"`
+	// Added for the pressure / swap / disk latency / TCP charts.
+	SwapUsed    float64  `json:"swapUsed"`
+	SwapIn      *float64 `json:"swapIn"`
+	SwapOut     *float64 `json:"swapOut"`
+	PSICPU      *float64 `json:"psiCpu"`
+	PSIMem      *float64 `json:"psiMem"`
+	PSIMemFull  *float64 `json:"psiMemFull"`
+	PSIIO       *float64 `json:"psiIo"`
+	PSIIOFull   *float64 `json:"psiIoFull"`
+	IOUtil      *float64 `json:"ioUtil"`
+	IOAwait     *float64 `json:"ioAwait"`
+	TCPInUse    *float64 `json:"tcpInUse"`
+	TCPTimeWait *float64 `json:"tcpTimeWait"`
 }
 
 // PointOf extracts the chart values of a snapshot.
@@ -57,6 +70,14 @@ func PointOf(s *Snapshot) Point {
 	}
 	if c := h.CPUSplit; c != nil {
 		p.User, p.System, p.IOWait, p.Steal = &c.User, &c.System, &c.IOWait, &c.Steal
+	}
+	p.SwapUsed, p.SwapIn, p.SwapOut = h.Swap.Used, h.SwapIn, h.SwapOut
+	if x := h.PSI; x != nil {
+		p.PSICPU, p.PSIMem, p.PSIMemFull, p.PSIIO, p.PSIIOFull = x.CPU, x.Mem, x.MemFull, x.IO, x.IOFull
+	}
+	p.IOUtil, p.IOAwait = h.IOUtil, h.IOAwait
+	if t := h.TCP; t != nil {
+		p.TCPInUse, p.TCPTimeWait = &t.InUse, &t.TimeWait
 	}
 	return p
 }

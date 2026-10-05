@@ -29,6 +29,8 @@ func script(docker string, o scriptOpts) string {
 	b.WriteString(baseScript(docker))
 	// Exact block I/O bytes per container from cgroup v2 (systemd or cgroupfs driver); readable without root.
 	b.WriteString("echo @@CIO; for f in /sys/fs/cgroup/system.slice/docker-*.scope/io.stat /sys/fs/cgroup/docker/*/io.stat; do [ -r \"$f\" ] && echo \"#$f\" && cat \"$f\"; done\n")
+	// CPU throttling per container (cgroup v2, or v1 cpu controller): enforcement periods and throttled periods.
+	b.WriteString("echo @@CCPU; for f in /sys/fs/cgroup/system.slice/docker-*.scope/cpu.stat /sys/fs/cgroup/docker/*/cpu.stat /sys/fs/cgroup/cpu,cpuacct/docker/*/cpu.stat /sys/fs/cgroup/cpu/docker/*/cpu.stat; do [ -r \"$f\" ] && echo \"#$f\" && grep -E '^nr_(periods|throttled) ' \"$f\"; done\n")
 	if len(o.netPIDs) > 0 {
 		ids := make([]string, 0, len(o.netPIDs))
 		for id := range o.netPIDs {
@@ -67,6 +69,8 @@ echo @@DISK; df -PB1 -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/
 echo @@INODES; df -Pi -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null
 echo @@DISKSTATS; cat /proc/diskstats
 echo @@NET; cat /proc/net/dev
+echo @@PSI; for r in cpu memory io; do [ -r /proc/pressure/$r ] && sed "s/^/$r /" /proc/pressure/$r; done
+echo @@SOCKSTAT; cat /proc/net/sockstat /proc/net/sockstat6 2>/dev/null
 echo @@DOCKER_PS; ` + docker + ` ps -a --no-trunc --format '{{json .}}' 2>&1
 echo @@DOCKER_STATS; ` + docker + ` stats --no-stream --no-trunc --format '{{json .}}' 2>&1
 `
@@ -109,6 +113,23 @@ type DiskIO struct {
 	WriteBps float64 `json:"writeBps"`
 	IOPS     float64 `json:"iops"`
 	UtilPct  float64 `json:"util"`
+	AwaitMs  float64 `json:"await"` // average time per read/write, queue included
+}
+
+// PSI is the share of time (%) tasks were stalled waiting for a resource (Linux pressure stall information).
+// "Some" = at least one task waited; "full" = all non-idle tasks waited at once (memory and I/O only).
+type PSI struct {
+	CPU     *float64 `json:"cpu"`
+	Mem     *float64 `json:"mem"`
+	MemFull *float64 `json:"memFull"`
+	IO      *float64 `json:"io"`
+	IOFull  *float64 `json:"ioFull"`
+}
+
+// TCP sockets from /proc/net/sockstat (IPv4 + IPv6).
+type TCP struct {
+	InUse    float64 `json:"inUse"`    // open TCP sockets (established and other states)
+	TimeWait float64 `json:"timeWait"` // closed, waiting for late packets
 }
 
 type Host struct {
@@ -131,7 +152,11 @@ type Host struct {
 	DiskIO   []DiskIO   `json:"diskIO"`
 	IORead   *float64   `json:"ioRead"`  // bytes/s, all devices
 	IOWrite  *float64   `json:"ioWrite"` // bytes/s, all devices
+	IOUtil   *float64   `json:"ioUtil"`  // busiest disk, % of time busy
+	IOAwait  *float64   `json:"ioAwait"` // ms per request, all disks
 	Net      Net        `json:"net"`
+	PSI      *PSI       `json:"psi"` // nil when the kernel has no PSI (< 4.20 or disabled)
+	TCP      *TCP       `json:"tcp"`
 }
 
 type Container struct {
@@ -148,6 +173,10 @@ type Container struct {
 	MemUsed   *float64 `json:"memUsed"`
 	MemLimit  *float64 `json:"memLimit"`
 	MemPct    *float64 `json:"memPct"`
+	// MemLimitPct is the usage against a real memory limit (nil when the container has none).
+	MemLimitPct *float64 `json:"memLimitPct"`
+	// Throttled is the share of CPU enforcement periods in which the container hit its CPU limit (%).
+	Throttled *float64 `json:"throttled"`
 	NetIO     string   `json:"netIO"`
 	BlockIO   string   `json:"blockIO"`
 	PIDs      *int     `json:"pids"`
@@ -169,6 +198,8 @@ type Container struct {
 type ctrCounters struct {
 	net, blk       [2]float64
 	netSrc, blkSrc byte
+	cpu            [2]float64 // cgroup nr_periods, nr_throttled
+	hasCPU         bool
 }
 
 // Event is a container lifecycle event from `docker events`.
@@ -212,7 +243,7 @@ type Snapshot struct {
 
 type cpuTimes struct{ idle, total, user, system, iowait, steal float64 }
 
-type ioCounters struct{ ops, rsect, wsect, ticks float64 }
+type ioCounters struct{ ops, rsect, wsect, ticks, qticks float64 }
 
 // raw keeps the cumulative counters of the previous sample to compute rates.
 type raw struct {
@@ -221,6 +252,7 @@ type raw struct {
 	rx, tx float64
 	disk   map[string]ioCounters
 	vm     map[string]float64
+	psi    map[string]float64 // "cpu some" -> total stalled µs
 	// inspect is nil when the cycle did not run docker inspect.
 	inspect     map[string]inspectInfo
 	ctr         map[string]ctrCounters
@@ -328,7 +360,7 @@ func parseDiskstats(lines []string) map[string]ioCounters {
 			continue
 		}
 		// reads completed, sectors read, writes completed, sectors written, ms spent doing I/O
-		out[f[2]] = ioCounters{ops: num(f[3]) + num(f[7]), rsect: num(f[5]), wsect: num(f[9]), ticks: num(f[12])}
+		out[f[2]] = ioCounters{ops: num(f[3]) + num(f[7]), rsect: num(f[5]), wsect: num(f[9]), ticks: num(f[12]), qticks: num(f[6]) + num(f[10])}
 	}
 	return out
 }
@@ -443,6 +475,89 @@ func parseCgroupIO(lines []string) map[string][2]float64 {
 		out[id] = v
 	}
 	return out
+}
+
+// parseCgroupCPU reads nr_periods / nr_throttled of each container's cgroup.
+func parseCgroupCPU(lines []string) map[string][2]float64 {
+	out := map[string][2]float64{}
+	id := ""
+	for _, l := range lines {
+		if strings.HasPrefix(l, "#") {
+			id = containerIDRe.FindString(l)
+			continue
+		}
+		f := strings.Fields(l)
+		if id == "" || len(f) != 2 {
+			continue
+		}
+		v := out[id]
+		switch f[0] {
+		case "nr_periods":
+			v[0] = num(f[1])
+		case "nr_throttled":
+			v[1] = num(f[1])
+		}
+		out[id] = v
+	}
+	return out
+}
+
+// parsePSI reads "cpu some avg10=0.00 avg60=0.00 avg300=0.00 total=123" lines into "cpu some" -> total µs.
+func parsePSI(lines []string) map[string]float64 {
+	out := map[string]float64{}
+	for _, l := range lines {
+		f := strings.Fields(l)
+		if len(f) < 3 {
+			continue
+		}
+		for _, kv := range f[2:] {
+			if v, ok := strings.CutPrefix(kv, "total="); ok {
+				out[f[0]+" "+f[1]] = num(v)
+			}
+		}
+	}
+	return out
+}
+
+// psiRates turns the stalled-time counters into the % of the last interval spent stalled.
+func psiRates(prev, cur map[string]float64, dt float64) *PSI {
+	if len(cur) == 0 || dt <= 0 {
+		return nil
+	}
+	pct := func(k string) *float64 {
+		c, ok1 := cur[k]
+		p, ok2 := prev[k]
+		if !ok1 || !ok2 || c < p {
+			return nil
+		}
+		return ptr(round(math.Min(100, (c-p)/(dt*1e6)*100), 2))
+	}
+	return &PSI{CPU: pct("cpu some"), Mem: pct("memory some"), MemFull: pct("memory full"), IO: pct("io some"), IOFull: pct("io full")}
+}
+
+// parseSockstat reads "TCP: inuse 5 orphan 0 tw 2 alloc 7 mem 1" and "TCP6: inuse 3".
+func parseSockstat(lines []string) *TCP {
+	var t TCP
+	found := false
+	for _, l := range lines {
+		f := strings.Fields(l)
+		if len(f) < 3 || (f[0] != "TCP:" && f[0] != "TCP6:") {
+			continue
+		}
+		found = true
+		for i := 1; i+1 < len(f); i += 2 {
+			switch f[i] {
+			case "inuse":
+				t.InUse += num(f[i+1])
+			case "tw":
+				t.TimeWait += num(f[i+1])
+			}
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &t
 }
 
 // parseContainerNet sums the non-loopback interfaces of each container's network namespace.
@@ -588,7 +703,7 @@ func parse(id, name, out string, prev *raw) (*Snapshot, *raw) {
 	s := sections(out)
 	now := time.Now()
 	stat, cores := parseCPU(s["STAT"])
-	cur := &raw{at: now, cpu: stat, disk: parseDiskstats(s["DISKSTATS"]), vm: parseKV(s["VMSTAT"], " ")}
+	cur := &raw{at: now, cpu: stat, disk: parseDiskstats(s["DISKSTATS"]), vm: parseKV(s["VMSTAT"], " "), psi: parsePSI(s["PSI"])}
 	if _, ok := s["INSPECT"]; ok {
 		cur.inspect = parseInspect(s["INSPECT"])
 		cur.events = parseEvents(s["EVENTS"])
@@ -634,7 +749,7 @@ func parse(id, name, out string, prev *raw) (*Snapshot, *raw) {
 			const page = 4096
 			h.SwapIn = rate(prev.vm["pswpin"]*page, cur.vm["pswpin"]*page)
 			h.SwapOut = rate(prev.vm["pswpout"]*page, cur.vm["pswpout"]*page)
-			var rd, wr float64
+			var rd, wr, util, qt, nops float64
 			for name, c := range cur.disk {
 				p, ok := prev.disk[name]
 				if !ok {
@@ -647,12 +762,26 @@ func parse(id, name, out string, prev *raw) (*Snapshot, *raw) {
 					IOPS:     round(math.Max(0, (c.ops-p.ops)/dt), 1),
 					UtilPct:  round(math.Min(100, math.Max(0, (c.ticks-p.ticks)/(dt*1000)*100)), 1),
 				}
+				if ops := c.ops - p.ops; ops > 0 {
+					io.AwaitMs = round(math.Max(0, (c.qticks-p.qticks)/ops), 2)
+					qt += c.qticks - p.qticks
+					nops += ops
+				}
+				util = math.Max(util, io.UtilPct)
 				rd += io.ReadBps
 				wr += io.WriteBps
 				h.DiskIO = append(h.DiskIO, io)
 			}
 			sort.Slice(h.DiskIO, func(i, j int) bool { return h.DiskIO[i].Name < h.DiskIO[j].Name })
 			h.IORead, h.IOWrite = ptr(rd), ptr(wr)
+			if len(h.DiskIO) > 0 {
+				h.IOUtil = ptr(util)
+				h.IOAwait = ptr(0.0)
+				if nops > 0 {
+					h.IOAwait = ptr(round(math.Max(0, qt/nops), 2))
+				}
+			}
+			h.PSI = psiRates(prev.psi, cur.psi, dt)
 		}
 	}
 	h.Mem.Total = mem["MemTotal"]
@@ -691,8 +820,17 @@ func parse(id, name, out string, prev *raw) (*Snapshot, *raw) {
 		h.Disks = append(h.Disks, Disk{FS: f[0], Mount: mount, Size: size, Used: used, Pct: round(used/size*100, 2), InodePct: inodes[mount]})
 	}
 
+	h.TCP = parseSockstat(s["SOCKSTAT"])
+
 	d := parseDocker(s["DOCKER_PS"], s["DOCKER_STATS"])
-	containerRates(d, cur, prev, parseCgroupIO(s["CIO"]), parseContainerNet(s["CNET"]))
+	containerRates(d, cur, prev, parseCgroupIO(s["CIO"]), parseContainerNet(s["CNET"]), parseCgroupCPU(s["CCPU"]))
+	// Memory against a real limit only: without one Docker reports the host's RAM as the limit.
+	for i := range d.Containers {
+		c := &d.Containers[i]
+		if c.MemUsed != nil && c.MemLimit != nil && *c.MemLimit > 0 && (h.Mem.Total == 0 || *c.MemLimit < h.Mem.Total*0.98) {
+			c.MemLimitPct = ptr(round(*c.MemUsed / *c.MemLimit * 100, 2))
+		}
+	}
 	return &Snapshot{
 		ID: id, Name: name, Status: "online", UpdatedAt: now.UnixMilli(),
 		Host: h, Docker: d,
@@ -700,7 +838,7 @@ func parse(id, name, out string, prev *raw) (*Snapshot, *raw) {
 }
 
 // containerRates prefers exact counters and turns them into per-second rates.
-func containerRates(d *Docker, cur, prev *raw, cio, cnet map[string][2]float64) {
+func containerRates(d *Docker, cur, prev *raw, cio, cnet, ccpu map[string][2]float64) {
 	cur.ctr = map[string]ctrCounters{}
 	var dt float64
 	if prev != nil {
@@ -724,6 +862,9 @@ func containerRates(d *Docker, cur, prev *raw, cio, cnet map[string][2]float64) 
 		if v, ok := cnet[c.ID]; ok {
 			cnt.net, cnt.netSrc = v, 'p'
 		}
+		if v, ok := ccpu[c.ID]; ok {
+			cnt.cpu, cnt.hasCPU = v, true
+		}
 		c.counters = cnt
 		cur.ctr[c.ID] = cnt
 		if prev == nil {
@@ -738,6 +879,12 @@ func containerRates(d *Docker, cur, prev *raw, cio, cnet map[string][2]float64) 
 		}
 		if cnt.blkSrc != 0 && cnt.blkSrc == p.blkSrc {
 			c.BlkRead, c.BlkWrite = rate(p.blk[0], cnt.blk[0]), rate(p.blk[1], cnt.blk[1])
+		}
+		// Periods only advance when the container has a CPU limit: no periods, no throttling figure.
+		if cnt.hasCPU && p.hasCPU {
+			if periods := cnt.cpu[0] - p.cpu[0]; periods > 0 {
+				c.Throttled = ptr(round(math.Min(100, math.Max(0, (cnt.cpu[1]-p.cpu[1])/periods*100)), 2))
+			}
 		}
 	}
 }

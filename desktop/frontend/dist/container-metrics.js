@@ -16,6 +16,8 @@ function loadPrefs() {
 }
 
 const fmtCpu = (v) => `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)}%`;
+// 12.5% stays 12.5% on the axis (not 13%), 4.0% reads 4%.
+const fmtShare = (v) => `${+v.toFixed(1)}%`;
 const fmtMem = (v) => fmtBytes(v).replace('.0 ', ' ');
 const fmtRateShort = (v) => fmtRate(v).replace('.0 ', ' ');
 
@@ -94,6 +96,17 @@ export function containerMetricsTab({ projectOf }) {
   const netP = panel('Container network');
   const ioP = panel('Container disk I/O');
   const cpu = new SeriesPanel(cpuP.body, { format: fmtCpu, label: 'CPU usage per container over time' });
+  // Only containers started with a limit (--memory / --cpus) have these two.
+  const limP = panel('Container memory vs limit');
+  const thrP = panel('Container CPU throttling');
+  const lim = new SeriesPanel(limP.body, {
+    format: fmtShare, minMax: 10, maxCap: 100, label: 'Memory use as % of each container limit',
+    emptyText: 'No container has a memory limit — this chart shows containers started with --memory (mem_limit in compose)',
+  });
+  const thr = new SeriesPanel(thrP.body, {
+    format: fmtShare, minMax: 5, maxCap: 100, label: 'Share of CPU periods in which each container was throttled',
+    emptyText: 'No container has a CPU limit — this chart shows containers started with --cpus (cpus in compose)',
+  });
   const mem = new SeriesPanel(memP.body, { format: fmtMem, bytes: true, label: 'Memory usage per container over time' });
   const net = new SeriesPanel(netP.body, { format: fmtRateShort, bytes: true, label: 'Network throughput per container over time' });
   const io = new SeriesPanel(ioP.body, { format: fmtRateShort, bytes: true, label: 'Disk throughput per container over time' });
@@ -138,19 +151,24 @@ export function containerMetricsTab({ projectOf }) {
     io.setData(src.t, grouped(combine(src.blkRead, src.blkWrite, prefs.io)));
     const what = prefs.group ? 'series' : 'containers';
     cpuP.right.textContent = `${cpu.stats.length} ${what} · % of server CPU · top 8 colored`;
+    // Percentages of each container's own limit do not add up: these stay per container.
+    lim.setData(src.t, src.memLimit || new Map());
+    thr.setData(src.t, src.throttled || new Map());
+    limP.right.textContent = `${lim.stats.length} limited container${lim.stats.length === 1 ? '' : 's'} · 100% = out of memory (OOM kill)`;
+    thrP.right.textContent = `${thr.stats.length} limited container${thr.stats.length === 1 ? '' : 's'} · % of time slices held back by --cpus`;
     memP.right.textContent = `${mem.stats.length} ${what} · top 8 colored`;
     netNote.textContent = `${net.stats.length} ${what} · host-network containers excluded`;
     ioNote.textContent = `${io.stats.length} ${what}`;
   }
   function applyMarkers() {
-    for (const chart of [cpu, mem, net, io]) chart.setEvents(prefs.markers ? events : []);
+    for (const chart of [cpu, thr, mem, lim, net, io]) chart.setEvents(prefs.markers ? events : []);
   }
   groupBox.addEventListener('change', () => { prefs.group = groupBox.checked; save(); render(); });
   markerBox.addEventListener('change', () => { prefs.markers = markerBox.checked; save(); applyMarkers(); });
 
   return {
-    panels: [toolbar, cpuP.el, memP.el, netP.el, ioP.el, evP.el],
-    // next: { t: [], cpu, mem, netRx, netTx, blkRead, blkWrite } with Map(name -> values aligned with t)
+    panels: [toolbar, cpuP.el, thrP.el, memP.el, limP.el, netP.el, ioP.el, evP.el],
+    // next: { t: [], cpu, mem, netRx, netTx, blkRead, blkWrite, memLimit, throttled } with Map(name -> values aligned with t)
     setData(next) {
       src = next;
       render();
@@ -161,7 +179,7 @@ export function containerMetricsTab({ projectOf }) {
       renderEvents();
     },
     destroy() {
-      for (const chart of [cpu, mem, net, io]) chart.destroy();
+      for (const chart of [cpu, thr, mem, lim, net, io]) chart.destroy();
     },
   };
 }
