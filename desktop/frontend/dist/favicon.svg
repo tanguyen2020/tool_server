@@ -1,1 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="7" rx="2" fill="#3987e5"/><rect x="2" y="14" width="20" height="7" rx="2" fill="#199e70"/><circle cx="6" cy="6.5" r="1.3" fill="#fff"/><circle cx="6" cy="17.5" r="1.3" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Pixel-fitted version for 16–24 px: fewer, bolder shapes on the 32-unit grid. -->
+  <rect x="0" y="0" width="32" height="32" rx="7" fill="#2a74dc"/>
+  <rect x="4" y="5" width="24" height="9" rx="2" fill="#ffffff"/>
+  <rect x="4" y="18" width="24" height="9" rx="2" fill="#ffffff"/>
+  <rect x="7" y="8" width="3" height="3" rx="1.5" fill="#16a34a"/>
+  <rect x="7" y="21" width="3" height="3" rx="1.5" fill="#16a34a"/>
+  <rect x="13" y="9" width="12" height="1.5" rx=".75" fill="#2a74dc"/>
+  <rect x="13" y="22" width="12" height="1.5" rx=".75" fill="#9db6d8"/>
+</svg>
