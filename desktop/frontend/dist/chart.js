@@ -1,6 +1,7 @@
 import { h, fmtTime } from './util.js';
 
-export const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+// el: read the token where it is used (the logs / terminal dock has its own dark tokens).
+export const cssVar = (name, el = document.documentElement) => getComputedStyle(el).getPropertyValue(name).trim();
 export const FONT = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
 
 export function niceMax(v, bytes = false) {

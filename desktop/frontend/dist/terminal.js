@@ -14,39 +14,23 @@ let shown = null; // term currently visible
 let fontSize = 13;
 try { fontSize = Number(localStorage.getItem('termFontSize')) || 13; } catch {}
 
-// ANSI colors readable on each theme's background.
-const PALETTES = {
-  dark: {
-    black: '#1a1a19', red: '#e66767', green: '#4fc46a', yellow: '#e5b93b', blue: '#5b9cf0', magenta: '#d57ad5', cyan: '#3fbfbf', white: '#c3c2b7',
-    brightBlack: '#6f6d68', brightRed: '#ff8a8a', brightGreen: '#7ee08f', brightYellow: '#f5d36b', brightBlue: '#86b6ef', brightMagenta: '#ec9cec', brightCyan: '#6fdcdc', brightWhite: '#ffffff',
-  },
-  light: {
-    black: '#0b0b0b', red: '#b42d2d', green: '#1f7a1f', yellow: '#8a6100', blue: '#1c5cab', magenta: '#8f3f8f', cyan: '#0e7272', white: '#6f6d68',
-    brightBlack: '#52514e', brightRed: '#d03b3b', brightGreen: '#2a9a2a', brightYellow: '#a87800', brightBlue: '#2a78d6', brightMagenta: '#a64ca6', brightCyan: '#138a8a', brightWhite: '#3a3a38',
-  },
+// The dock is dark in every theme (.dark-surface), so the terminal always uses the dark ANSI palette.
+const PALETTE = {
+  black: '#1a1a19', red: '#e66767', green: '#4fc46a', yellow: '#e5b93b', blue: '#5b9cf0', magenta: '#d57ad5', cyan: '#3fbfbf', white: '#c3c2b7',
+  brightBlack: '#6f6d68', brightRed: '#ff8a8a', brightGreen: '#7ee08f', brightYellow: '#f5d36b', brightBlue: '#86b6ef', brightMagenta: '#ec9cec', brightCyan: '#6fdcdc', brightWhite: '#ffffff',
 };
 
-function isDark() {
-  const t = document.documentElement.dataset.theme;
-  return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-}
-
 function theme() {
+  const dock = document.getElementById('logs');
   return {
-    ...PALETTES[isDark() ? 'dark' : 'light'],
-    background: cssVar('--page'),
-    foreground: cssVar('--ink'),
-    cursor: cssVar('--accent'),
-    cursorAccent: cssVar('--page'),
-    selectionBackground: isDark() ? 'rgba(134, 182, 239, 0.35)' : 'rgba(42, 120, 214, 0.25)',
+    ...PALETTE,
+    background: cssVar('--page', dock),
+    foreground: cssVar('--ink', dock),
+    cursor: cssVar('--accent', dock),
+    cursorAccent: cssVar('--page', dock),
+    selectionBackground: 'rgba(134, 182, 239, 0.35)',
   };
 }
-
-function applyTheme() {
-  for (const list of byServer.values()) for (const t of list) t.xterm.options.theme = theme();
-}
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
-new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 function decode(b64) {
   const bin = atob(b64);

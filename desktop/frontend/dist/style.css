@@ -1,4 +1,6 @@
-:root {
+:root,
+/* The logs / terminal dock stays dark in every theme: long monospace text reads better light-on-dark. */
+.dark-surface {
   color-scheme: dark;
   --page: #0d0d0d;
   --surface: #1a1a19;
@@ -334,6 +336,7 @@ tr.project-row td { background: var(--surface-2); color: var(--ink-2); font-size
 .login-card .brand { font-size: 16px; margin-bottom: 6px; }
 
 /* ---------- Logs drawer ---------- */
+.dark-surface { color: var(--ink); }
 .logs {
   position: fixed; left: 0; right: 0; bottom: 0; height: 55vh; z-index: 20;
   display: flex; flex-direction: column;

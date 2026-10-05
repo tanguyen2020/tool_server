@@ -311,10 +311,10 @@ function drawVolume() {
   ctx.font = '10px system-ui, -apple-system, "Segoe UI", sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = cssVar('--muted');
+  ctx.fillStyle = cssVar('--muted', volCanvas);
   ctx.fillText(String(max), pad.l - 6, pad.t + 4);
   ctx.fillText('0', pad.l - 6, pad.t + ph - 2);
-  ctx.strokeStyle = cssVar('--axis');
+  ctx.strokeStyle = cssVar('--axis', volCanvas);
   ctx.beginPath(); ctx.moveTo(pad.l, pad.t + ph + 0.5); ctx.lineTo(width - pad.r, pad.t + ph + 0.5); ctx.stroke();
 
   buckets.forEach((b, i) => {
@@ -324,14 +324,14 @@ function drawVolume() {
       const c = b.counts[l];
       if (!c) continue;
       const hgt = (c / max) * ph;
-      ctx.fillStyle = cssVar(LEVEL_COLOR[l]);
+      ctx.fillStyle = cssVar(LEVEL_COLOR[l], volCanvas);
       ctx.fillRect(x + 0.5, y - hgt, Math.max(1, bw - 2), hgt);
       y -= hgt;
     }
   });
   // Time labels under the bars (first, middle, last bucket).
   ctx.textBaseline = 'top';
-  ctx.fillStyle = cssVar('--muted');
+  ctx.fillStyle = cssVar('--muted', volCanvas);
   const fmt = (t) => new Date(t).toLocaleTimeString('en-GB', { hour12: false, ...(t1 - t0 < 3600e3 ? {} : { hour: '2-digit', minute: '2-digit' }) });
   [[0, 'left'], [Math.floor(n / 2), 'center'], [n - 1, 'right']].forEach(([i, align], k, all) => {
     if (k && i === all[k - 1][0]) return;
