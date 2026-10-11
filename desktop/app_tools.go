@@ -41,7 +41,8 @@ type TunnelInfo struct {
 	LocalPort  int    `json:"localPort"`
 	RemoteHost string `json:"remoteHost"`
 	RemotePort int    `json:"remotePort"`
-	Active     int32  `json:"active"` // open connections
+	Container  string `json:"container,omitempty"` // set when started from the Containers tab
+	Active     int32  `json:"active"`              // open connections
 	Since      int64  `json:"since"`
 	LastError  string `json:"lastError,omitempty"`
 }
@@ -65,8 +66,8 @@ var hostRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$|^\[?[0-9a-fA
 func (a *App) emitTunnels() { runtime.EventsEmit(a.ctx, "tunnels", a.ListTunnels()) }
 
 // StartTunnel listens on 127.0.0.1:localPort (0 = any free port) and forwards each connection
-// through the server's SSH connection to remoteHost:remotePort.
-func (a *App) StartTunnel(serverID string, localPort int, remoteHost string, remotePort int) (TunnelInfo, error) {
+// through the server's SSH connection to remoteHost:remotePort. container names the container it leads to, if any.
+func (a *App) StartTunnel(serverID string, localPort int, remoteHost string, remotePort int, container string) (TunnelInfo, error) {
 	srv, conn, err := a.server(serverID)
 	if err != nil {
 		return TunnelInfo{}, err
@@ -87,7 +88,7 @@ func (a *App) StartTunnel(serverID string, localPort int, remoteHost string, rem
 	}
 	t := &tunnel{ln: ln, conns: map[net.Conn]bool{}, info: TunnelInfo{
 		ID: newToken(), ServerID: serverID, Server: srv.Name, LocalPort: ln.Addr().(*net.TCPAddr).Port,
-		RemoteHost: strings.Trim(remoteHost, "[]"), RemotePort: remotePort, Since: time.Now().UnixMilli(),
+		RemoteHost: strings.Trim(remoteHost, "[]"), RemotePort: remotePort, Container: strings.TrimSpace(container), Since: time.Now().UnixMilli(),
 	}}
 	target := net.JoinHostPort(t.info.RemoteHost, strconv.Itoa(remotePort))
 	a.tun.mu.Lock()
@@ -129,7 +130,11 @@ func (a *App) StartTunnel(serverID string, localPort int, remoteHost string, rem
 			}()
 		}
 	}()
-	a.audit(serverID, "tunnel start", fmt.Sprintf("localhost:%d → %s", t.info.LocalPort, target), nil)
+	detail := fmt.Sprintf("localhost:%d → %s", t.info.LocalPort, target)
+	if t.info.Container != "" {
+		detail += " (" + t.info.Container + ")"
+	}
+	a.audit(serverID, "tunnel start", detail, nil)
 	a.emitTunnels()
 	return t.snapshot(), nil
 }

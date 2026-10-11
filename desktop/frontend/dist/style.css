@@ -494,6 +494,7 @@ pre.json { margin: 0; padding: 12px 14px; font: 12px/1.5 var(--mono); color: var
 .containers-table tr.row-issue td:first-child { box-shadow: inset 3px 0 0 var(--critical); }
 .cell-metric { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .cell-spark { width: 64px; height: 18px; display: block; }
+.c-status div { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
 .c-status .exit-code { font-size: 12px; }
 .c-status .exit-code.bad { color: var(--ink); font-weight: 600; }
 .c-ports { font-size: 12px; }
@@ -668,6 +669,8 @@ tbody tr:not(.project-row):hover td { background: var(--hover); }
 .btn.act-start { --c: var(--good); }
 .btn.act-restart { --c: var(--cyan); }
 .btn.act-remove { --c: var(--critical); }
+.btn.act-forward { --c: var(--cat-3); position: relative; }
+.btn.act-forward .fwd-dot { position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; box-shadow: 0 0 0 2px var(--surface); }
 .c-actions { gap: 4px; }
 .containers-table td.c-actions-cell, .containers-table th:last-child { padding-left: 6px; }
 
@@ -679,6 +682,8 @@ tbody tr:not(.project-row):hover td { background: var(--hover); }
 .containers-table.no-ports th:nth-child(5), .containers-table.no-ports td:nth-child(5),
 .containers-table.no-restarts th:nth-child(8), .containers-table.no-restarts td:nth-child(8),
 .containers-table.no-health th:nth-child(3), .containers-table.no-health td:nth-child(3) { display: none; }
+.containers-table.compact-forward .act-forward .lbl { display: none; }
+.containers-table.compact-forward .act-forward { width: 28px; padding: 0; }
 .containers-table.compact-actions .act .lbl { display: none; }
 .containers-table.compact-actions .act { width: 28px; padding: 0; }
 .containers-table.narrow-name .c-image { max-width: 150px; }

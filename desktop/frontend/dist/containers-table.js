@@ -9,7 +9,7 @@ const actBtn = (kind, iconName, label, title = label) => h('button', { type: 'bu
   icon(iconName), h('span', { class: 'lbl' }, label));
 
 // Low-priority details hidden one step at a time until the table fits without horizontal scrolling.
-const FIT_STEPS = ['no-spark', 'no-pids', 'no-block', 'no-net', 'no-ports', 'narrow-name', 'compact-actions', 'no-restarts', 'no-health', 'no-status'];
+const FIT_STEPS = ['compact-forward', 'no-pids', 'no-block', 'no-net', 'no-spark', 'no-ports', 'narrow-name', 'compact-actions', 'no-restarts', 'no-health', 'no-status'];
 
 // Common exit codes: why did the container stop?
 export const EXIT_MEANING = {
@@ -62,7 +62,7 @@ function loadPrefs() {
   }
 }
 
-function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline, hostMemTotal, hostCores }) {
+function containerRow({ onLogs, onInspect, onExec, onForward, forwardsOf, onRemove, onAction, sparkline, hostMemTotal, hostCores }) {
   const chipCell = h('td');
   const nameEl = h('div', { class: 'c-name' });
   const imageEl = h('div', { class: 'c-image' });
@@ -80,6 +80,9 @@ function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline
   const logsBtn = actBtn('logs', 'logs', 'Logs', 'Follow the logs (docker logs -f)');
   const execBtn = actBtn('exec', 'terminal', 'Exec', 'Open a shell inside the container (docker exec)');
   const inspectBtn = actBtn('inspect', 'info', 'Inspect', 'Details (docker inspect)');
+  const forwardBtn = actBtn('forward', 'forward', 'Forward', 'Forward a port of the container to this computer (localhost)');
+  const forwardDot = h('span', { class: 'dot good fwd-dot', hidden: true });
+  forwardBtn.append(forwardDot);
   const toggleBtn = actBtn('stop', 'stop', 'Stop');
   const restartBtn = actBtn('restart', 'restart', 'Restart');
   const removeBtn = actBtn('remove', 'trash', 'Remove', 'Remove the container (docker rm); image and volumes are kept');
@@ -89,12 +92,13 @@ function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline
     h('td', { class: 'num' }, h('div', { class: 'cell-metric' }, cpuText, cpuSpark)),
     h('td', { class: 'num' }, h('div', { class: 'cell-metric' }, memText, memSpark)),
     restartCell, netCell, blockCell, pidsCell,
-    h('td', { class: 'c-actions-cell' }, h('div', { class: 'c-actions' }, logsBtn, execBtn, inspectBtn, toggleBtn, restartBtn, removeBtn)),
+    h('td', { class: 'c-actions-cell' }, h('div', { class: 'c-actions' }, logsBtn, execBtn, forwardBtn, inspectBtn, toggleBtn, restartBtn, removeBtn)),
   );
   let c = null;
   logsBtn.addEventListener('click', () => onLogs(c));
   inspectBtn.addEventListener('click', () => onInspect(c));
   execBtn.addEventListener('click', () => onExec(c));
+  forwardBtn.addEventListener('click', (e) => onForward(e, forwardBtn, c));
   toggleBtn.addEventListener('click', () => onAction(c, c.state === 'running' ? 'stop' : 'start', buttons));
   restartBtn.addEventListener('click', () => onAction(c, 'restart', buttons));
   removeBtn.addEventListener('click', () => onRemove(c));
@@ -102,7 +106,7 @@ function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline
     const running = c.state === 'running';
     openMenu(e, tr, [
       { label: 'Logs', action: () => onLogs(c) },
-      ...(running ? [{ label: 'Exec (shell)', action: () => onExec(c) }] : []),
+      ...(running ? [{ label: 'Exec (shell)', action: () => onExec(c) }, { label: 'Forward port…', action: () => onForward(e, tr, c) }] : []),
       { label: 'Inspect', action: () => onInspect(c) },
       running ? { label: 'Stop', action: () => onAction(c, 'stop', buttons) } : { label: 'Start', action: () => onAction(c, 'start', buttons) },
       ...(running ? [{ label: 'Restart', action: () => onAction(c, 'restart', buttons) }] : []),
@@ -130,12 +134,15 @@ function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline
     const status = (c.status || '').replace(/\s*\((healthy|unhealthy|health: starting)\)/, '');
     if (c.state === 'exited' && c.exitCode != null) {
       const meaning = EXIT_MEANING[c.exitCode] || 'non-zero exit';
+      // Keep the column narrow: the short meaning here ("killed"), the whole explanation on hover.
       statusCell.replaceChildren(
         h('div', {}, status.replace(/^Exited \(-?\d+\)\s*/, 'Exited ')),
-        h('div', { class: `exit-code ${NORMAL_EXIT.has(c.exitCode) ? 'muted' : 'bad'}` }, `code ${c.exitCode} · ${meaning}`),
+        h('div', { class: `exit-code ${NORMAL_EXIT.has(c.exitCode) ? 'muted' : 'bad'}` }, `code ${c.exitCode} · ${meaning.replace(/\s*\(.*\)$/, '')}`),
       );
+      statusCell.title = `${status}\nExit code ${c.exitCode}: ${meaning}`;
     } else {
-      statusCell.replaceChildren(status);
+      statusCell.replaceChildren(h('div', {}, status));
+      statusCell.title = status;
     }
 
     const ports = parsePorts(c.ports);
@@ -181,6 +188,12 @@ function containerRow({ onLogs, onInspect, onExec, onRemove, onAction, sparkline
     }
     restartBtn.hidden = !running;
     execBtn.hidden = !running;
+    const fwd = forwardsOf(c);
+    forwardBtn.hidden = !running && !fwd.length;
+    forwardDot.hidden = !fwd.length;
+    forwardBtn.title = fwd.length
+      ? `Forwarding: ${fwd.map((t) => `localhost:${t.localPort} → ${t.remotePort}`).join(', ')}\nClick for more ports or to stop`
+      : 'Forward a port of the container to this computer (localhost)';
     removeBtn.hidden = running; // running containers: right-click → "Stop and remove…"
   };
   return { tr, update };
@@ -368,6 +381,7 @@ export function containersPanel(opts) {
 
   return {
     el,
+    refresh: render,
     update(next) {
       snap = next;
       render();

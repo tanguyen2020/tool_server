@@ -26,7 +26,7 @@ const PATHS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   bookmark: '<path d="M6 3h12v18l-6-4-6 4Z"/>',
   zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
-  plug: '<path d="M9 2v6"/><path d="M15 2v6"/><path d="M6 8h12v3a6 6 0 0 1-12 0Z"/><path d="M12 17v5"/>',
+  forward: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
   broom: '<path d="M19 3 11 11"/><path d="M4 21c0-4 2-8 6-9l2 2c-1 4-5 6-9 7Z"/>',
   more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
   exportIcon: '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/>',

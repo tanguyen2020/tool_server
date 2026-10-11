@@ -6,7 +6,7 @@ import { initTerminals } from './terminal.js';
 import { initDock, setDockServer, closeDockServer, openTerminalFor, openTaskFor, pasteToTerminal, dockTerminalCount } from './dock.js';
 import { servicesTab } from './services.js';
 import { filesTab } from './files.js';
-import { networkTab } from './network.js';
+import { networkTab, forwardContainer, containerTunnels, watchTunnels } from './network.js';
 import { openRunMany } from './runmany.js';
 import { openSnippets, snippetMenu } from './snippets.js';
 import { openActivity } from './activity.js';
@@ -985,6 +985,8 @@ function detailView(id, root) {
     onLogs: (c) => openLogs(state.snaps.get(id), c),
     onInspect: (c) => openInspect(state.snaps.get(id), c),
     onExec: (c) => openTerminalFor(id, c.name),
+    onForward: (e, anchor, c) => forwardContainer(e, anchor, id, c, serverName),
+    forwardsOf: (c) => containerTunnels(id, c.name),
     onRemove: (c) => removeContainer(id, c),
     onAction: (c, action, buttons) => doAction(id, c, action, buttons),
     onCompose: (project, action) => composeAction(id, project, action),
@@ -1001,6 +1003,7 @@ function detailView(id, root) {
     hostMemTotal: () => state.snaps.get(id)?.host?.mem.total,
     hostCores: () => state.snaps.get(id)?.host?.cores,
   });
+  const unwatchTunnels = watchTunnels(() => containers.refresh()); // the Forward button shows active forwards
 
   // ---- Container metrics tab
   const metrics = containerMetricsTab({
@@ -1209,6 +1212,7 @@ function detailView(id, root) {
       services.destroy();
       files.destroy();
       network.destroy();
+      unwatchTunnels();
       [...hostCharts, spaceChart].forEach((c) => c.destroy());
     },
   };
