@@ -9,6 +9,12 @@ import (
 
 func f(v float64) *float64 { return &v }
 
+// midnight returns local midnight n days ago: test data must stay inside Retention, since the store prunes when it opens.
+func midnight(n int) time.Time {
+	y, m, d := time.Now().AddDate(0, 0, -n).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+}
+
 func snapAt(t time.Time, cpu, mem float64, containers map[string][2]float64) *monitor.Snapshot {
 	d := &monitor.Docker{}
 	for name, v := range containers {
@@ -26,7 +32,7 @@ func TestRecordAndQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := time.Date(2026, 10, 4, 10, 0, 0, 0, time.Local)
+	base := midnight(2).Add(10 * time.Hour)
 	// Minute 0: two samples averaged; minute 1: one sample; minute 2: nothing (gap); minute 3: one sample.
 	s.Add(snapAt(base.Add(5*time.Second), 10, 40, map[string][2]float64{"web": {2, 100}, "db": {8, 500}}))
 	s.Add(snapAt(base.Add(35*time.Second), 30, 60, map[string][2]float64{"web": {4, 300}, "db": {8, 500}}))
@@ -81,7 +87,7 @@ func TestLongRangeIsDownsampled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local)
+	base := midnight(4)
 	for i := 0; i < 3*24*60; i++ { // 3 days, one sample per minute
 		s.Add(snapAt(base.Add(time.Duration(i)*time.Minute), float64(i%100), 50, nil))
 	}

@@ -16,7 +16,7 @@ func TestContainerIOSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	base := time.Date(2026, 10, 4, 10, 0, 0, 0, time.Local)
+	base := midnight(2).Add(10 * time.Hour)
 	add := func(at time.Time, rx float64) {
 		snap := snapAt(at, 10, 10, nil)
 		snap.Docker.Containers = []monitor.Container{{Name: "db", State: "running", CPU: f(1), MemUsed: f(100),
@@ -45,7 +45,7 @@ func TestLegacyContainerRecordsStillRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	base := time.Date(2026, 10, 4, 9, 0, 0, 0, time.Local)
+	base := midnight(2).Add(9 * time.Hour)
 	// Write one record in the old "c:" layout: count, then (id, cpu, mem).
 	err = s.db.Update(func(tx *bolt.Tx) error {
 		id, err := s.nameID(tx, "srv", "old")

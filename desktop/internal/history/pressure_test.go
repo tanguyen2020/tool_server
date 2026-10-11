@@ -16,7 +16,7 @@ func TestNewValuesDisksAndForecast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := time.Date(2026, 10, 4, 0, 0, 0, 0, time.Local)
+	base := midnight(2)
 	const gib = float64(1 << 30)
 
 	// A record written by an older version: 15 host values only.
