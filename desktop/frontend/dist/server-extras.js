@@ -1,6 +1,7 @@
 import { h, toast, fmtBytes, fmtTime } from './util.js';
 import { call, confirmDialog } from './bridge.js';
 import { icon } from './icons.js';
+import { modal } from './ui.js';
 
 function fmtAgo(ms) {
   if (!ms) return 'unknown';
@@ -147,6 +148,7 @@ const CLEANUPS = [
   { kind: 'containers', label: 'Stopped containers', type: 'Containers', ask: 'Remove every stopped container?\n\nTheir images and volumes are kept.' },
   { kind: 'images-dangling', label: 'Dangling images', type: 'Images', ask: 'Remove dangling images (untagged layers left by rebuilds and pulls)?' },
   { kind: 'images-unused', label: 'Unused images', type: 'Images', ask: 'Remove every image not used by a container (running or stopped)?\n\nThey will be downloaded again when needed.' },
+  { kind: 'build-cache-old', label: 'Build cache older than 7 days', type: '', ask: 'Remove build cache not used for 7 days?\n\nRecent cache is kept, so the next builds stay fast.' },
   { kind: 'build-cache', label: 'Build cache', type: 'Build Cache', ask: 'Remove the build cache?\n\nThe next image builds will be slower.' },
   { kind: 'networks', label: 'Unused networks', type: '', ask: 'Remove networks not used by any container?' },
   { kind: 'volumes', label: 'Unused volumes', type: 'Local Volumes', danger: true, ask: 'Remove unused anonymous volumes?\n\n⚠ Volumes hold data (databases, uploads). Anything in a volume no container uses is deleted for good.' },
@@ -178,7 +180,11 @@ export function dockerDiskPanel(serverId) {
       })));
   };
   const btn = h('button', { type: 'button', class: 'btn sm' }, 'Calculate');
-  const p = panel('span-12', 'Docker disk usage', btn);
+  const unusedBtn = h('button', { type: 'button', class: 'btn sm act act-stop', title: 'Pick which unused images and volumes to remove' },
+    icon('broom'), 'Unused images & volumes…');
+  // After a removal, refresh the table when it was already calculated.
+  unusedBtn.addEventListener('click', () => openUnusedDialog(serverId, () => { if (btn.textContent === 'Recalculate') btn.click(); }));
+  const p = panel('span-12', 'Docker disk usage', [unusedBtn, btn]);
   p.body.append(h('div', { class: 'muted' }, 'Space used by images, containers, volumes and the build cache (`docker system df`). Can take a while on busy hosts.'));
   btn.addEventListener('click', async () => {
     btn.disabled = true;
@@ -203,7 +209,131 @@ export function dockerDiskPanel(serverId) {
   return { el: p.el };
 }
 
-const daysLeft = (c) => Math.floor((c.notAfter - Date.now()) / 86400e3);
+// Docker's own size style (powers of 1000): 1.2GB, 512kB.
+function fmtDockerSize(b) {
+  const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (b >= 1000 && i < units.length - 1) { b /= 1000; i++; }
+  return i ? `${b.toFixed(b < 10 ? 2 : 1)}${units[i]}` : `${b}B`;
+}
+
+// Lists the images and volumes no container (running or stopped) uses, and removes the ones picked.
+function openUnusedDialog(serverId, onRemoved) {
+  const m = modal({ title: 'Unused images & volumes', sub: 'Not used by any container, running or stopped.', wide: true });
+  const selImages = new Set();
+  const selVolumes = new Set();
+  let data = { images: [], volumes: [] };
+  const summary = h('span', { class: 'muted' });
+  const reloadBtn = h('button', { type: 'button', class: 'btn ghost' }, icon('refresh'), 'Refresh');
+  const removeBtn = h('button', { type: 'button', class: 'btn solid-danger', disabled: true }, icon('trash'), 'Remove selected');
+  m.foot.append(summary, h('span', { class: 'spacer' }), reloadBtn, removeBtn);
+
+  function updateSummary() {
+    const bytes = data.images.filter((x) => selImages.has(x.id)).reduce((s, x) => s + x.bytes, 0)
+      + data.volumes.filter((x) => selVolumes.has(x.name)).reduce((s, x) => s + x.bytes, 0);
+    const n = selImages.size + selVolumes.size;
+    summary.textContent = n
+      ? `${selImages.size} image${selImages.size === 1 ? '' : 's'}, ${selVolumes.size} volume${selVolumes.size === 1 ? '' : 's'} selected · up to ${fmtDockerSize(bytes)}`
+      : 'Nothing selected';
+    removeBtn.disabled = !n;
+  }
+
+  // One table with a select-all box in its header. key() gives the id kept in sel.
+  function section(title, rows, sel, key, cols, cells, note) {
+    if (!rows.length) return h('div', { class: 'unused-section' }, h('h4', {}, title), h('div', { class: 'muted' }, 'None — nothing to clean up here.'));
+    const boxes = [];
+    const all = h('input', { type: 'checkbox', 'aria-label': `Select all ${title.toLowerCase()}` });
+    const syncAll = () => {
+      all.checked = rows.every((r) => sel.has(key(r)));
+      all.indeterminate = !all.checked && rows.some((r) => sel.has(key(r)));
+    };
+    all.addEventListener('change', () => {
+      rows.forEach((r) => (all.checked ? sel.add(key(r)) : sel.delete(key(r))));
+      boxes.forEach((b) => { b.checked = all.checked; });
+      updateSummary();
+    });
+    const body = rows.map((r) => {
+      const cb = h('input', { type: 'checkbox', checked: sel.has(key(r)) });
+      boxes.push(cb);
+      cb.addEventListener('change', () => { cb.checked ? sel.add(key(r)) : sel.delete(key(r)); syncAll(); updateSummary(); });
+      const tr = h('tr', {}, h('td', { class: 'cb' }, cb), cells(r));
+      // A click anywhere on the row toggles it.
+      tr.addEventListener('click', (e) => { if (e.target !== cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); } });
+      return tr;
+    });
+    syncAll();
+    return h('div', { class: 'unused-section' },
+      h('h4', {}, `${title} (${rows.length})`),
+      note ? h('div', { class: 'muted small' }, note) : '',
+      h('div', { class: 'table-wrap' }, h('table', { class: 'unused-table' },
+        h('thead', {}, h('tr', {}, h('th', { class: 'cb' }, all), cols.map(([c, cls]) => h('th', { class: cls || '' }, c)))),
+        h('tbody', {}, body))));
+  }
+
+  function render() {
+    // Forget selections that are no longer in the list.
+    [...selImages].forEach((id) => { if (!data.images.some((x) => x.id === id)) selImages.delete(id); });
+    [...selVolumes].forEach((n) => { if (!data.volumes.some((x) => x.name === n)) selVolumes.delete(n); });
+    m.body.replaceChildren(
+      section('Images', data.images, selImages, (x) => x.id, [['Image'], ['Created'], ['Size', 'num']], (x) => [
+        h('td', {}, x.tags.length
+          ? h('div', { class: 'unused-name' }, x.tags[0], x.tags.length > 1 ? h('span', { class: 'muted', title: x.tags.slice(1).join('\n') }, ` +${x.tags.length - 1} tag${x.tags.length > 2 ? 's' : ''}`) : '')
+          : h('div', { class: 'unused-name' }, h('span', { class: 'chip' }, 'dangling'), ' ', h('span', { class: 'mono muted' }, x.id.slice(7, 19)))),
+        h('td', { class: 'muted' }, x.created),
+        h('td', { class: 'num' }, x.size)],
+        'Removed images are downloaded again when a container needs them. Images you built on the server must be built again. Sizes include layers shared with other images, so less may be freed.'),
+      section('Volumes', data.volumes, selVolumes, (x) => x.name, [['Volume'], ['Project'], ['Size', 'num']], (x) => [
+        h('td', {}, h('div', { class: 'unused-name mono', title: x.name }, x.anonymous ? [h('span', { class: 'chip' }, 'anonymous'), ' ', x.name.slice(0, 12)] : x.name)),
+        h('td', { class: 'muted' }, x.project || '–'),
+        h('td', { class: 'num' }, x.size || '–')],
+        '⚠ Volumes hold data (databases, uploads). A removed volume is deleted for good. Named volumes of a stopped-and-removed compose project show up here too.'),
+    );
+    updateSummary();
+  }
+
+  async function load() {
+    reloadBtn.disabled = true;
+    removeBtn.disabled = true;
+    m.body.replaceChildren(h('div', { class: 'du-busy' }, h('span', { class: 'spinner' }), 'Looking for unused images and volumes… (measuring volumes can take a while)'));
+    try {
+      data = await call('DockerUnused', serverId);
+      render();
+    } catch (err) {
+      m.body.replaceChildren(h('div', { class: 'du-error' }, icon('alert'), `Could not list unused images and volumes: ${err.message}`));
+    } finally {
+      reloadBtn.disabled = false;
+    }
+  }
+
+  reloadBtn.addEventListener('click', load);
+  removeBtn.addEventListener('click', async () => {
+    const imgs = data.images.filter((x) => selImages.has(x.id));
+    const vols = data.volumes.filter((x) => selVolumes.has(x.name));
+    const list = [...imgs.map((x) => x.tags[0] || `<none> ${x.id.slice(7, 19)}`), ...vols.map((x) => `volume ${x.name}`)];
+    const msg = [`Remove ${imgs.length} image${imgs.length === 1 ? '' : 's'} and ${vols.length} volume${vols.length === 1 ? '' : 's'}?`,
+      list.length > 20 ? `${list.slice(0, 20).join('\n')}\n… and ${list.length - 20} more` : list.join('\n'),
+      vols.length ? '⚠ The data in the selected volumes is deleted for good.' : ''].join('\n\n');
+    if (!(await confirmDialog(msg, 'Remove unused images and volumes', { code: true }))) return;
+    removeBtn.disabled = true;
+    reloadBtn.disabled = true;
+    try {
+      const r = await call('DockerRemoveUnused', serverId, imgs.map((x) => x.id), vols.map((x) => x.name));
+      const parts = [`Removed ${r.images} image${r.images === 1 ? '' : 's'} and ${r.volumes} volume${r.volumes === 1 ? '' : 's'}`];
+      if (r.skipped) parts.push(`${r.skipped} skipped (now in use or already gone)`);
+      if (r.errors?.length) parts.push(`${r.errors.length} failed: ${r.errors[0]}`);
+      toast(parts.join(' · '), r.errors?.length > 0);
+      selImages.clear();
+      selVolumes.clear();
+      onRemoved?.();
+    } catch (err) {
+      toast(`Cleanup failed: ${err.message}`, true);
+    }
+    await load();
+  });
+  load();
+}
+
+const daysLeft =(c) => Math.floor((c.notAfter - Date.now()) / 86400e3);
 
 function certChip(c) {
   const d = daysLeft(c);

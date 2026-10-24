@@ -813,6 +813,22 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .cleanup { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .cleanup-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
 .cleanup-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.unused-section + .unused-section { margin-top: 18px; }
+.unused-section h4 { margin: 0 0 4px; font-size: 14px; }
+.unused-section > .muted.small { margin-bottom: 8px; max-width: 760px; }
+.unused-table th.cb, .unused-table td.cb { width: 28px; padding-right: 0; }
+.unused-table tbody tr { cursor: pointer; }
+.unused-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.unused-name { max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unused-table tbody tr.disabled { cursor: default; color: var(--muted); }
+.unused-table tbody tr.disabled:hover { background: none; }
+.cleanup-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 10px; }
+.cleanup-foot .spacer { flex: 1; }
+.cleanup-table td:last-child { width: 1%; white-space: nowrap; }
+.cleanup-table .muted.small { margin-top: 2px; }
+.log-limit-now { margin-bottom: 14px; }
+.log-limit-note { margin-top: 10px; }
+.log-limit-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
 
 /* ---------- Compose project rows ---------- */
 .proj-head { display: flex; align-items: center; gap: 12px; }

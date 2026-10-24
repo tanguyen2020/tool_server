@@ -21,6 +21,7 @@ var pruneArgs = map[string]string{
 	"images-dangling": "image prune -f",
 	"images-unused":   "image prune -a -f",
 	"build-cache":     "builder prune -f",
+	"build-cache-old": "builder prune -f --filter until=168h",
 	"volumes":         "volume prune -f",
 	"networks":        "network prune -f",
 }

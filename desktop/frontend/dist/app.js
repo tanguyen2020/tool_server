@@ -19,6 +19,7 @@ import { containersPanel, hasIssue } from './containers-table.js';
 import { containerMetricsTab } from './container-metrics.js';
 import { openAlertSettings, setAlertSettingsHandler } from './alert-settings.js';
 import { topProcessesPanel, maintenancePanel, dockerDiskPanel, diskExplorerPanel } from './server-extras.js';
+import { systemCleanupPanel, containerLogsPanel } from './cleanup.js';
 import { call, on, confirmDialog } from './bridge.js';
 import { icon, setLabel } from './icons.js';
 import { initPrefs, getPref, setPref, getJSONPref, setJSONPref } from './prefs.js';
@@ -859,6 +860,8 @@ function detailView(id, root) {
   const duP = diskExplorerPanel(id, { mounts: () => state.snaps.get(id)?.host?.disks });
   const topP = topProcessesPanel(id, (cid) => state.snaps.get(id)?.docker?.containers?.find((c) => c.id === cid)?.name);
   const dfP = dockerDiskPanel(id);
+  const logsP = containerLogsPanel(id);
+  const cleanP = systemCleanupPanel(id, { onAutoremove: () => openTaskFor(id, { kind: 'autoremove', title: 'apt autoremove', once: true }) });
   let lastHost = null; // read by the dynamic axis max / reference line below
   // CPU axis: Auto fits the data (0–5% on a quiet server, up to 0–100%); 0–100% shows the share of the whole CPU.
   let cpuFull = getPref('cpuScale') === 'full';
@@ -1019,12 +1022,12 @@ function detailView(id, root) {
   const panes = {
     server: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-server', 'aria-labelledby': 'tab-server' },
       cpuP.el, loadP.el, memP.el, swapP.el, psiP.el, netP.el, ioP.el, latP.el, utilP.el, tcpP.el, diskP.el, spaceP.el,
-      maintP.el, coresP.el, topP.el, duP.el),
+      maintP.el, coresP.el, topP.el, duP.el, cleanP.el),
     services: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-services', 'aria-labelledby': 'tab-services' }, services.el),
     files: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-files', 'aria-labelledby': 'tab-files' }, files.el),
     network: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-network', 'aria-labelledby': 'tab-network' }, ...network.panels),
     containers: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-containers', 'aria-labelledby': 'tab-containers' }, containers.el),
-    metrics: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-metrics', 'aria-labelledby': 'tab-metrics' }, ...metrics.panels, dfP.el),
+    metrics: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-metrics', 'aria-labelledby': 'tab-metrics' }, ...metrics.panels, dfP.el, logsP.el),
   };
 
   let tab = loadTab();

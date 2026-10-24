@@ -55,6 +55,91 @@ func (a *App) DockerPrune(serverID, kind string) (string, error) {
 	return out, err
 }
 
+// DockerUnused lists the images and volumes no container uses, with their sizes.
+func (a *App) DockerUnused(serverID string) (ops.Unused, error) {
+	srv, conn, err := a.server(serverID)
+	if err != nil {
+		return ops.Unused{}, err
+	}
+	return ops.FindUnused(a.ctx, conn, srv, true)
+}
+
+// DockerRemoveUnused deletes the chosen unused images (by ID) and volumes (by name).
+func (a *App) DockerRemoveUnused(serverID string, imageIDs, volumes []string) (ops.RemoveResult, error) {
+	srv, conn, err := a.server(serverID)
+	if err != nil {
+		return ops.RemoveResult{}, err
+	}
+	res, err := ops.RemoveUnused(a.ctx, conn, srv, imageIDs, volumes)
+	if err == nil && len(res.Errors) > 0 && res.Images+res.Volumes == 0 {
+		err = errors.New(res.Errors[0])
+	}
+	a.audit(serverID, "docker cleanup", fmt.Sprintf("%d unused images, %d volumes", res.Images, res.Volumes), err)
+	go a.mon.Collect(serverID)
+	return res, err
+}
+
+// DockerContainerLogs lists the containers' log files by size.
+func (a *App) DockerContainerLogs(serverID string) (ops.ContainerLogs, error) {
+	srv, conn, err := a.server(serverID)
+	if err != nil {
+		return ops.ContainerLogs{}, err
+	}
+	return ops.FindContainerLogs(a.ctx, conn, srv)
+}
+
+// DockerTruncateLogs empties the log files of the given containers. Returns the bytes freed.
+func (a *App) DockerTruncateLogs(serverID string, ids []string) (int64, error) {
+	srv, conn, err := a.server(serverID)
+	if err != nil {
+		return 0, err
+	}
+	freed, err := ops.TruncateLogs(a.ctx, conn, srv, ids)
+	a.audit(serverID, "docker cleanup", fmt.Sprintf("empty %d container logs", len(ids)), err)
+	return freed, err
+}
+
+func (a *App) DockerLogConfig(serverID string) (ops.DaemonLogConfig, error) {
+	srv, conn, err := a.server(serverID)
+	if err != nil {
+		return ops.DaemonLogConfig{}, err
+	}
+	return ops.GetDaemonLogConfig(a.ctx, conn, srv)
+}
+
+// DockerSetLogLimit writes the default log limit for new containers into /etc/docker/daemon.json.
+func (a *App) DockerSetLogLimit(serverID, maxSize, maxFile string) error {
+	srv, conn, err := a.server(serverID)
+	if err != nil {
+		return err
+	}
+	err = ops.SetDaemonLogLimit(a.ctx, conn, srv, maxSize, maxFile)
+	a.audit(serverID, "docker log limit", maxSize+" × "+maxFile, err)
+	return err
+}
+
+// ------------------------------------------------------------------ system cleanup
+
+func (a *App) SystemCleanup(serverID string) (ops.SystemCleanupInfo, error) {
+	_, conn, err := a.server(serverID)
+	if err != nil {
+		return ops.SystemCleanupInfo{}, err
+	}
+	return ops.SystemCleanup(a.ctx, conn)
+}
+
+// RunSystemCleanup removes one kind of leftovers and returns the new sizes.
+func (a *App) RunSystemCleanup(serverID, kind string) (ops.SystemCleanupInfo, error) {
+	_, conn, err := a.server(serverID)
+	if err != nil {
+		return ops.SystemCleanupInfo{}, err
+	}
+	info, err := ops.RunSystemCleanup(a.ctx, conn, kind)
+	a.audit(serverID, "system cleanup", kind, err)
+	go a.mon.Collect(serverID)
+	return info, err
+}
+
 // ------------------------------------------------------------------ systemd
 
 func (a *App) Services(serverID string) ([]ops.Service, error) {
@@ -126,6 +211,7 @@ type TaskInfo struct {
 // OpenTask runs an operation in a terminal so its output and prompts are visible:
 //   - compose:<update|up|restart|stop|start|down> with the project name
 //   - upgrade (apt-get update && upgrade, answers typed by the user)
+//   - autoremove (apt-get autoremove, answered by the user)
 //   - journal with a service name (follows its journal)
 //   - shell with a folder (a shell opened in that folder)
 func (a *App) OpenTask(serverID, kind, arg string, cols, rows int) (TaskInfo, error) {
@@ -147,6 +233,8 @@ func (a *App) OpenTask(serverID, kind, arg string, cols, rows int) (TaskInfo, er
 		audit = "compose " + kind[8:]
 	case kind == "upgrade":
 		script, title, audit = ops.UpgradeScript(), "apt upgrade", "package upgrade"
+	case kind == "autoremove":
+		script, title, audit = ops.AutoremoveScript(), "apt autoremove", "system cleanup"
 	case kind == "journal":
 		if script, err = ops.JournalScript(arg); err != nil {
 			return TaskInfo{}, err
