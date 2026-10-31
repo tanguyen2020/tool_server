@@ -215,20 +215,31 @@ func parseMaintenance(out string, now time.Time) *Maintenance {
 }
 
 // parseCerts reads "path|notAfter|CN" lines; notAfter looks like "Mar  1 12:00:00 2026 GMT".
+// Only the newest certificate of each domain counts: an old one left behind (a disabled site, a file the
+// renewal replaced) would otherwise report a domain as expiring although it was renewed.
 func parseCerts(lines []string) []Cert {
-	certs := []Cert{}
-	seen := map[string]bool{}
+	newest := map[string]Cert{} // domain (or the path, without a CN) -> latest expiry
 	for _, l := range lines {
 		parts := strings.SplitN(l, "|", 3)
-		if len(parts) < 3 || seen[parts[0]] {
+		if len(parts) < 3 {
 			continue
 		}
 		t, err := time.Parse("Jan 2 15:04:05 2006 MST", strings.Join(strings.Fields(parts[1]), " "))
 		if err != nil {
 			continue
 		}
-		seen[parts[0]] = true
-		certs = append(certs, Cert{Path: parts[0], Subject: parts[2], NotAfter: t.UnixMilli()})
+		c := Cert{Path: parts[0], Subject: strings.TrimSpace(parts[2]), NotAfter: t.UnixMilli()}
+		key := strings.ToLower(c.Subject)
+		if key == "" {
+			key = "path:" + c.Path
+		}
+		if old, ok := newest[key]; !ok || c.NotAfter > old.NotAfter {
+			newest[key] = c
+		}
+	}
+	certs := make([]Cert, 0, len(newest))
+	for _, c := range newest {
+		certs = append(certs, c)
 	}
 	sort.Slice(certs, func(i, j int) bool { return certs[i].NotAfter < certs[j].NotAfter })
 	return certs

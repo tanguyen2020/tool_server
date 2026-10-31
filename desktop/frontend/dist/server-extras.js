@@ -347,7 +347,7 @@ function certChip(c) {
 function certSummary(certs) {
   if (!certs?.length) return h('span', { class: 'muted', title: 'Looked in /etc/letsencrypt/live and the nginx / Apache configuration' }, 'none found');
   const soonest = certs[0];
-  return [certChip(soonest), ' ', h('span', { class: 'muted' }, `${soonest.subject || soonest.path}${certs.length > 1 ? ` (soonest of ${certs.length})` : ''}`)];
+  return [certChip(soonest), ' ', h('span', { class: 'muted' }, `${soonest.subject || soonest.path}${certs.length > 1 ? ` (soonest of ${certs.length} domains)` : ''}`)];
 }
 
 // ---------------------------------------------------------------- Disk usage by folder (on demand)

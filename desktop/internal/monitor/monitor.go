@@ -123,7 +123,7 @@ type Monitor struct {
 	maintAt  map[string]time.Time // last attempt
 	maintRun map[string]bool
 	reboots  map[string]*rebootState // servers rebooted from the app, until they are up again
-	certWarn map[string]bool         // server/cert path -> expiry already announced
+	certWarn *certNotes              // certificate expiries already announced (kept on disk)
 
 	restarts   map[string]map[string]int         // server -> container id -> restart count
 	restartsAt map[string]time.Time              // last time restart counts were fetched
@@ -141,7 +141,7 @@ func New(st *store.Store, pool *sshpool.Pool) *Monitor {
 		snaps: map[string]*Snapshot{}, prev: map[string]*raw{}, history: map[string][]Point{},
 		inFlight: map[string]bool{}, fails: map[string]int{}, expected: map[string]time.Time{},
 		alerts: map[string]map[string]*alertState{},
-		maint:  map[string]*hostinfo.Maintenance{}, maintAt: map[string]time.Time{}, maintRun: map[string]bool{}, reboots: map[string]*rebootState{}, certWarn: map[string]bool{},
+		maint:  map[string]*hostinfo.Maintenance{}, maintAt: map[string]time.Time{}, maintRun: map[string]bool{}, reboots: map[string]*rebootState{}, certWarn: loadCertNotes(st.Dir()),
 		restarts: map[string]map[string]int{}, restartsAt: map[string]time.Time{}, restartLog: map[string]map[string][]time.Time{},
 		inspect: map[string]map[string]inspectInfo{}, evSince: map[string]int64{},
 	}
@@ -604,36 +604,6 @@ func (m *Monitor) CheckMaintenance(id string) error {
 		go m.Collect(id) // publish the new status right away
 	}
 	return err
-}
-
-// CertWarnDays: certificates expiring within this many days raise an alert.
-const CertWarnDays = 14
-
-func (m *Monitor) certAlertsLocked(srv store.Server, info *hostinfo.Maintenance) []Alert {
-	var out []Alert
-	now := time.Now()
-	for _, c := range info.Certs {
-		key := srv.ID + "|" + c.Path
-		days := c.DaysLeft(now)
-		if days > CertWarnDays {
-			delete(m.certWarn, key)
-			continue
-		}
-		if m.certWarn[key] {
-			continue
-		}
-		m.certWarn[key] = true
-		name := c.Subject
-		if name == "" {
-			name = c.Path
-		}
-		when := fmt.Sprintf("expires in %d days", days)
-		if days < 0 {
-			when = "has expired"
-		}
-		out = append(out, Alert{"Certificate " + when + ": " + name, srv.Name + " · " + c.Path, true})
-	}
-	return out
 }
 
 type InitData struct {

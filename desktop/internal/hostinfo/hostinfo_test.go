@@ -84,3 +84,22 @@ func TestParseCerts(t *testing.T) {
 		t.Errorf("days left %d, want 14", d)
 	}
 }
+
+// An old certificate of a renewed domain (still referenced by a disabled site) must not count.
+func TestParseCertsNewestPerDomain(t *testing.T) {
+	certs := parseCerts([]string{
+		"/etc/nginx/ssl/shop-2025.crt|Feb  1 00:00:00 2026 GMT|shop.example.com",
+		"/etc/letsencrypt/live/shop.example.com/cert.pem|May  1 00:00:00 2026 GMT|shop.example.com",
+		"/etc/apache2/ssl/SHOP.crt|Mar  1 00:00:00 2026 GMT|SHOP.example.com",
+		"/etc/nginx/ssl/a.crt|Jan  1 00:00:00 2026 GMT|",
+		"/etc/nginx/ssl/b.crt|Jun  1 00:00:00 2026 GMT|",
+	})
+	if len(certs) != 3 {
+		t.Fatalf("want one per domain plus the two without a name, got %+v", certs)
+	}
+	for _, c := range certs {
+		if strings.EqualFold(c.Subject, "shop.example.com") && c.Path != "/etc/letsencrypt/live/shop.example.com/cert.pem" {
+			t.Errorf("the newest certificate of the domain must win: %+v", c)
+		}
+	}
+}
