@@ -1,5 +1,4 @@
-// Apply the saved theme before first paint to avoid a color flash ("system" = follow Windows).
-try {
-  const t = localStorage.getItem('theme');
-  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-} catch {}
+// Apply the saved theme (light or dark) before first paint to avoid a color flash; none saved yet = what Windows uses.
+let t = null;
+try { t = localStorage.getItem('theme'); } catch {}
+document.documentElement.dataset.theme = t === 'light' || t === 'dark' ? t : (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');

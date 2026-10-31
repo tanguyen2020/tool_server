@@ -12,21 +12,24 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="#/">
-      <img src="favicon.svg" alt="" width="20" height="20">
-      <span>Server Dashboard</span>
+    <a class="brand" href="#/" aria-label="Server Dashboard: overview">
+      <span class="brand-logo"><img src="favicon.svg" alt="" width="20" height="20"></span>
+      <span class="brand-name">Server Dashboard</span>
     </a>
     <button type="button" class="version-btn" id="version-btn" title="Version and updates"></button>
+    <span class="topbar-sep" aria-hidden="true"></span>
+    <nav class="tabbar" id="tabs" role="tablist" aria-label="Open servers"></nav>
     <div class="topbar-actions">
-      <button type="button" class="btn act act-start" id="run-btn" title="Run one command on several servers at once">Run on servers</button>
-      <button type="button" class="btn act act-exec" id="snippets-btn" title="Saved commands">Snippets</button>
-      <button type="button" class="btn act act-logs" id="activity-btn" title="What was done from this app">Activity</button>
-      <button type="button" class="btn ghost" id="alerts-btn" title="Alert thresholds">Alerts</button>
-      <label class="check" title="Windows notifications when a server becomes unreachable or a container stops unexpectedly"><input type="checkbox" id="notify-toggle"> Notifications</label>
-      <button type="button" class="btn ghost theme-btn" id="theme-toggle">◐ System</button>
+      <button type="button" class="btn pg-btn" id="db-btn" title="Back up, restore and copy PostgreSQL databases">Postgres</button>
+      <span class="topbar-sep" aria-hidden="true"></span>
+      <button type="button" class="btn icon-btn" id="run-btn" data-tip="Run a command on servers" aria-label="Run a command on servers"></button>
+      <button type="button" class="btn icon-btn" id="snippets-btn" data-tip="Snippets" aria-label="Snippets"></button>
+      <button type="button" class="btn icon-btn" id="activity-btn" data-tip="Activity" aria-label="Activity"></button>
+      <button type="button" class="btn icon-btn" id="alerts-btn" data-tip="Alert thresholds" aria-label="Alert thresholds"></button>
+      <label class="btn icon-btn notify-toggle" data-tip="Desktop notifications"><input type="checkbox" id="notify-toggle" aria-label="Desktop notifications"></label>
+      <button type="button" class="btn icon-btn theme-btn" id="theme-toggle" aria-label="Theme"></button>
     </div>
   </header>
-  <nav class="tabbar" id="tabs" role="tablist" aria-label="Open servers"></nav>
   <main id="view"></main>
 
   <dialog id="server-dialog" class="dialog">

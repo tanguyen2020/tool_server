@@ -1,10 +1,10 @@
 import { h, fmtTime } from './util.js';
-import { cssVar, niceMax, setupCanvas, drawYGrid, drawTimeTicks, charts, drawEventMarkers, eventRows } from './chart.js';
+import { cssVar, niceMax, setupCanvas, drawYGrid, drawTimeTicks, charts, drawEventMarkers, eventRows, leftPad, fillUnder, drawCrosshair } from './chart.js';
 
 // The 8 validated categorical slots. More hues would be indistinguishable, so only the
 // 8 largest series get a color; the rest are drawn as gray context lines.
 const SLOTS = 8;
-const PAD = { l: 74, r: 10, t: 8, b: 22 };
+const PAD = { r: 12, t: 10, b: 24 }; // the left side fits the widest Y label
 const TOOLTIP_ROWS = 8;
 
 const lastValue = (arr) => {
@@ -191,23 +191,24 @@ export class SeriesPanel {
 
     const { ctx, width, height } = setupCanvas(this.canvas);
     if (!width) return;
-    const pw = width - PAD.l - PAD.r;
-    const ph = height - PAD.t - PAD.b;
     const peak = Math.max(0, ...this.stats.map((s) => s.max));
     const max = Math.min(this.maxCap, Math.max(this.minMax, niceMax(peak * 1.1, this.bytes)));
-    const y = (v) => PAD.t + ph - (Math.min(v, max) / max) * ph;
+    const pad = { ...PAD, l: leftPad(ctx, max, this.format, this.bytes) };
+    const pw = width - pad.l - pad.r;
+    const ph = height - pad.t - pad.b;
+    const y = (v) => pad.t + ph - (Math.min(v, max) / max) * ph;
     const t0 = this.times[0];
     const t1 = this.times.at(-1);
-    const x = (t) => PAD.l + ((t - t0) / (t1 - t0 || 1)) * pw;
+    const x = (t) => pad.l + ((t - t0) / (t1 - t0 || 1)) * pw;
 
-    drawYGrid(ctx, { pad: PAD, width, y, max, format: this.format });
-    drawTimeTicks(ctx, { pad: PAD, height, pw, x, t0, t1 });
+    drawYGrid(ctx, { pad, width, y, max, format: this.format, bytes: this.bytes });
+    drawTimeTicks(ctx, { pad, height, pw, x, t0, t1 });
 
     // Crosshair index and the series closest to the pointer (hover highlight).
     let idx = -1;
     this.chartHover = null;
-    if (this.hoverX != null && this.hoverX >= PAD.l) {
-      const tHover = t0 + ((this.hoverX - PAD.l) / pw) * (t1 - t0);
+    if (this.hoverX != null && this.hoverX >= pad.l) {
+      const tHover = t0 + ((this.hoverX - pad.l) / pw) * (t1 - t0);
       let best = Infinity;
       this.times.forEach((t, i) => { if (Math.abs(t - tHover) < best) { best = Math.abs(t - tHover); idx = i; } });
       let nearest = 12; // px
@@ -240,24 +241,29 @@ export class SeriesPanel {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const muted = cssVar('--muted');
+    const area = (name, alpha) => {
+      const values = this.series.get(name);
+      const color = this.colorOf.has(name) ? cssVar(this.colorVar(name)) : muted;
+      fillUnder(ctx, this.times.map((t) => x(t)), values.map((v) => (v == null ? null : y(v))), { top: pad.t, base: pad.t + ph, color, alpha });
+    };
+    if (focus && this.series.has(focus)) area(focus, 0.2);
+    else if (this.stats.length <= 2) for (const s of this.stats) area(s.name, 0.14);
     const gray = this.stats.filter((s) => !this.colorOf.has(s.name));
     const colored = this.stats.filter((s) => this.colorOf.has(s.name)).sort((a, b) => a.max - b.max);
     for (const s of gray) if (s.name !== focus) stroke(s.name, 1, focus ? 0.15 : 0.35, muted);
-    for (const s of colored) if (s.name !== focus) stroke(s.name, 1.5, focus ? 0.2 : 1, cssVar(this.colorVar(s.name)));
+    for (const s of colored) if (s.name !== focus) stroke(s.name, 1.75, focus ? 0.2 : 1, cssVar(this.colorVar(s.name)));
     if (focus && this.series.has(focus)) {
       stroke(focus, 2.5, 1, this.colorOf.has(focus) ? cssVar(this.colorVar(focus)) : cssVar('--ink'));
     }
     ctx.globalAlpha = 1;
-    drawEventMarkers(ctx, this.events, { x, t0, t1, top: PAD.t, bottom: PAD.t + ph });
+    drawEventMarkers(ctx, this.events, { x, t0, t1, top: pad.t, bottom: pad.t + ph });
 
     if (idx < 0) {
       this.tip.hidden = true;
       return;
     }
     const hx = Math.round(x(this.times[idx])) + 0.5;
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = muted;
-    ctx.beginPath(); ctx.moveTo(hx, PAD.t); ctx.lineTo(hx, PAD.t + ph); ctx.stroke();
+    drawCrosshair(ctx, hx, pad.t, pad.t + ph);
 
     // Tooltip: the focused series first, then the largest values at this time.
     const at = this.stats
@@ -278,14 +284,14 @@ export class SeriesPanel {
     const rows = at.slice(0, TOOLTIP_ROWS).map((r) => {
       const key = h('i');
       key.style.background = `var(${this.colorVar(r.name)})`;
-      return h('div', { class: `row${r.name === focus ? ' focus' : ''}` }, key, h('b', {}, this.format(r.v)), h('span', {}, r.name));
+      return h('div', { class: `row${r.name === focus ? ' focus' : ''}` }, key, h('span', {}, r.name), h('b', {}, this.format(r.v)));
     });
     if (at.length > TOOLTIP_ROWS) rows.push(h('div', { class: 't' }, `+${at.length - TOOLTIP_ROWS} more`));
     rows.push(...eventRows(this.events, this.times[idx], Math.max((t1 - t0) / pw * 6, (t1 - t0) / this.times.length / 2)));
     this.tip.replaceChildren(h('div', { class: 't' }, fmtTime(this.times[idx])), ...rows);
     this.tip.hidden = false;
     const tw = this.tip.offsetWidth;
-    this.tip.style.left = `${hx + 12 + tw > width ? hx - 12 - tw : hx + 12}px`;
-    this.tip.style.top = `${PAD.t}px`;
+    this.tip.style.left = `${hx + 14 + tw > width ? hx - 14 - tw : hx + 14}px`;
+    this.tip.style.top = `${pad.t + 4}px`;
   }
 }

@@ -41,20 +41,85 @@ function strokeSeries(ctx, pts, key, x, y) {
   ctx.stroke();
 }
 
-// Horizontal grid lines with Y labels (4 steps from 0 to max).
-export function drawYGrid(ctx, { pad, width, y, max, format }) {
+// How many steps split 0..max into round values (50 → 5 × 10, not 4 × 12.5). Byte axes keep 4 (powers of two).
+export function tickCount(max, bytes = false) {
+  if (bytes) return 4;
+  for (const n of [4, 5, 2, 3, 6]) {
+    const v = max / n;
+    const p = 10 ** Math.floor(Math.log10(v));
+    const m = Math.round((v / p) * 1000) / 1000;
+    if ([1, 2, 2.5, 5, 10].includes(m)) return n;
+  }
+  return 4;
+}
+
+// Left padding that fits the widest Y label.
+export function leftPad(ctx, max, format, bytes = false) {
+  ctx.font = FONT;
+  const n = tickCount(max, bytes);
+  let w = 0;
+  for (let i = 0; i <= n; i++) w = Math.max(w, ctx.measureText(format((max * i) / n)).width);
+  return Math.max(34, Math.ceil(w) + 14);
+}
+
+// Horizontal grid lines with Y labels at round values: a solid baseline, light dashed lines above it.
+export function drawYGrid(ctx, { pad, width, y, max, format, bytes = false }) {
   ctx.font = FONT;
   ctx.lineWidth = 1;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
-  for (let i = 0; i <= 4; i++) {
-    const v = (max * i) / 4;
+  const n = tickCount(max, bytes);
+  for (let i = 0; i <= n; i++) {
+    const v = (max * i) / n;
     const yy = Math.round(y(v)) + 0.5;
+    ctx.save();
     ctx.strokeStyle = i === 0 ? cssVar('--axis') : cssVar('--grid');
+    if (i > 0) ctx.setLineDash([3, 4]);
     ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(width - pad.r, yy); ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = cssVar('--muted');
     ctx.fillText(format(v), pad.l - 8, yy);
   }
+}
+
+// A soft gradient under a series, down to the baseline (each unbroken run separately).
+export function fillUnder(ctx, xs, ys, { top, base, color, alpha }) {
+  const g = ctx.createLinearGradient(0, top, 0, base);
+  const hex = /^#[0-9a-f]{6}$/i.test(color) ? color : null;
+  g.addColorStop(0, hex ? hex + Math.round(alpha * 255).toString(16).padStart(2, '0') : color);
+  g.addColorStop(1, hex ? `${hex}00` : 'transparent');
+  ctx.save();
+  if (!hex) ctx.globalAlpha = alpha;
+  ctx.fillStyle = g;
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(run[0][0], base);
+      for (const [px, py] of run) ctx.lineTo(px, py);
+      ctx.lineTo(run.at(-1)[0], base);
+      ctx.closePath();
+      ctx.fill();
+    }
+    run = [];
+  };
+  for (let i = 0; i < xs.length; i++) {
+    if (ys[i] == null) { flush(); continue; }
+    run.push([xs[i], ys[i]]);
+  }
+  flush();
+  ctx.restore();
+}
+
+// The hover line: dashed, from top to bottom of the plot.
+export function drawCrosshair(ctx, hx, top, bottom) {
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = cssVar('--ink-2');
+  ctx.globalAlpha = 0.55;
+  ctx.beginPath(); ctx.moveTo(hx, top); ctx.lineTo(hx, bottom); ctx.stroke();
+  ctx.restore();
 }
 
 // Time labels along the X axis.
@@ -101,13 +166,24 @@ export class TimeChart {
     this.data = [];
     this.events = [];
     this.hoverX = null;
+    this.hidden = new Set(); // series keys switched off in the legend
 
-    this.legend = h('div', { class: 'legend' });
+    // Legend: one pill per series with its latest value; a click hides or shows the series.
+    this.legend = h('div', { class: 'legend chart-legend' });
     this.legendValues = series.map((s) => {
       const key = h('i');
       key.style.background = `var(${s.color})`;
       const val = h('b', {}, '–');
-      this.legend.append(h('span', {}, key, s.label, val));
+      const pill = h('button', { type: 'button', class: 'legend-pill', title: `Show or hide ${s.label}`, 'aria-pressed': 'true' }, key, h('span', {}, s.label), val);
+      pill.addEventListener('click', () => {
+        const visible = series.filter((x) => !this.hidden.has(x.key));
+        if (!this.hidden.has(s.key) && visible.length === 1) return; // keep one series on screen
+        this.hidden.has(s.key) ? this.hidden.delete(s.key) : this.hidden.add(s.key);
+        pill.classList.toggle('off', this.hidden.has(s.key));
+        pill.setAttribute('aria-pressed', String(!this.hidden.has(s.key)));
+        this.draw();
+      });
+      this.legend.append(pill);
       return val;
     });
     this.canvas = h('canvas', { role: 'img', 'aria-label': series.map((s) => s.label).join(', ') });
@@ -146,20 +222,23 @@ export class TimeChart {
     if (!this.canvas.isConnected) return;
     const { ctx, width, height } = setupCanvas(this.canvas);
     if (!width) return;
-    const pad = { l: 74, r: 10, t: 8, b: 22 };
-    const pw = width - pad.l - pad.r;
-    const ph = height - pad.t - pad.b;
+    const shown = this.series.filter((s) => !this.hidden.has(s.key));
     const pts = this.data;
-    const peak = Math.max(0, ...pts.flatMap((p) => this.series.map((s) => p[s.key] ?? 0)));
+    const peak = Math.max(0, ...pts.flatMap((p) => shown.map((s) => p[s.key] ?? 0)));
     const fixed = typeof this.yMax === 'function' ? this.yMax() : this.yMax;
     const refValue = this.ref?.value() ?? null;
     const max = fixed || Math.min(this.maxCap, Math.max(this.minMax, niceMax(Math.max(peak, refValue ?? 0) * 1.1, this.bytes)));
+    const pad = { l: leftPad(ctx, max, this.format, this.bytes), r: 12, t: 10, b: 24 };
+    const pw = width - pad.l - pad.r;
+    const ph = height - pad.t - pad.b;
     const y = (v) => pad.t + ph - (Math.min(v, max) / max) * ph;
 
-    drawYGrid(ctx, { pad, width, y, max, format: this.format });
+    drawYGrid(ctx, { pad, width, y, max, format: this.format, bytes: this.bytes });
 
-    const hasValue = pts.some((p) => this.series.some((s) => p[s.key] != null));
+    const hasValue = pts.some((p) => shown.some((s) => p[s.key] != null));
     if (pts.length < 2 || !hasValue) {
+      ctx.font = '12.5px system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.fillStyle = cssVar('--muted');
       ctx.textAlign = 'center';
       ctx.fillText(pts.length < 2 ? 'Collecting data…' : 'No data recorded in this range yet', pad.l + pw / 2, pad.t + ph / 2);
       this.tip.hidden = true;
@@ -172,10 +251,16 @@ export class TimeChart {
 
     drawTimeTicks(ctx, { pad, height, pw, x, t0, t1 });
 
-    ctx.lineWidth = 2;
+    // Areas first (under every line), then the lines; few series get a fill each, many only the first one.
+    const xs = pts.map((p) => x(p.t));
+    shown.forEach((s, i) => {
+      if (shown.length > 3 && i > 0) return;
+      fillUnder(ctx, xs, pts.map((p) => (p[s.key] == null ? null : y(p[s.key]))), { top: pad.t, base: pad.t + ph, color: cssVar(s.color), alpha: i === 0 ? 0.22 : 0.1 });
+    });
+    ctx.lineWidth = shown.length > 3 ? 1.75 : 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    for (const s of this.series) {
+    for (const s of shown) {
       ctx.strokeStyle = cssVar(s.color);
       strokeSeries(ctx, pts, s.key, x, y);
     }
@@ -183,9 +268,10 @@ export class TimeChart {
     if (refValue != null && refValue <= max) {
       const ry = Math.round(y(refValue)) + 0.5;
       ctx.save();
-      ctx.setLineDash([4, 4]);
+      ctx.setLineDash([5, 4]);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = cssVar('--ink-2');
+      ctx.strokeStyle = cssVar('--warning');
+      ctx.globalAlpha = 0.85;
       ctx.beginPath(); ctx.moveTo(pad.l, ry); ctx.lineTo(width - pad.r, ry); ctx.stroke();
       ctx.restore();
       ctx.font = FONT;
@@ -204,32 +290,30 @@ export class TimeChart {
     let best = pts[0];
     for (const p of pts) if (Math.abs(p.t - tHover) < Math.abs(best.t - tHover)) best = p;
     const hx = Math.round(x(best.t)) + 0.5;
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = cssVar('--muted');
-    ctx.beginPath(); ctx.moveTo(hx, pad.t); ctx.lineTo(hx, pad.t + ph); ctx.stroke();
-    for (const s of this.series) {
+    drawCrosshair(ctx, hx, pad.t, pad.t + ph);
+    for (const s of shown) {
       if (best[s.key] == null) continue;
       ctx.beginPath();
-      ctx.arc(hx, y(best[s.key]), 4, 0, Math.PI * 2);
+      ctx.arc(hx, y(best[s.key]), 4.5, 0, Math.PI * 2);
       ctx.fillStyle = cssVar(s.color);
       ctx.strokeStyle = cssVar('--surface');
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       ctx.fill(); ctx.stroke();
     }
 
     this.tip.replaceChildren(
       h('div', { class: 't' }, fmtTime(best.t)),
-      ...this.series.map((s) => {
+      ...shown.map((s) => {
         const key = h('i');
         key.style.background = `var(${s.color})`;
-        return h('div', { class: 'row' }, key, h('b', {}, best[s.key] != null ? this.format(best[s.key]) : '–'), h('span', {}, s.label));
+        return h('div', { class: 'row' }, key, h('span', {}, s.label), h('b', {}, best[s.key] != null ? this.format(best[s.key]) : '–'));
       }),
       ...eventRows(this.events, best.t, Math.max((t1 - t0) / pw * 6, (t1 - t0) / pts.length / 2)),
     );
     this.tip.hidden = false;
     const tw = this.tip.offsetWidth;
-    this.tip.style.left = `${hx + 12 + tw > width ? hx - 12 - tw : hx + 12}px`;
-    this.tip.style.top = `${pad.t}px`;
+    this.tip.style.left = `${hx + 14 + tw > width ? hx - 14 - tw : hx + 14}px`;
+    this.tip.style.top = `${pad.t + 4}px`;
   }
 }
 

@@ -1,12 +1,15 @@
-// Browser-like tabs: a fixed Overview tab plus one tab per opened server.
+// Browser-like tabs: a fixed Overview tab, one tab per opened server and the Backup & Restore tab.
 // Each tab keeps its own view (sub-tab, filters, scroll, log panel). Hidden tabs don't render;
 // they remember which servers changed and catch up when shown.
 import { h } from './util.js';
 import { openMenu } from './context-menu.js';
+import { icon } from './icons.js';
 
 const MAX_SERVER_TABS = 10;
 
-export const hashFor = (key) => (key === 'overview' ? '#/' : `#/server/${key}`);
+export const BACKUP = 'backup'; // the Backup & Restore tab
+export const hashFor = (key) => (key === 'overview' ? '#/' : key === BACKUP ? '#/backup' : `#/server/${key}`);
+const isServer = (key) => key !== 'overview' && key !== BACKUP;
 
 export function createTabManager({ strip, host, create, describe, onActivate, onClose, confirmClose = async () => true, busy = () => false }) {
   const tabs = new Map(); // key -> { key, root, view, used, pending: Set, events, scrollY }
@@ -24,9 +27,10 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
   function add(key) {
     if (tabs.has(key)) return;
     tabs.set(key, { key, root: null, view: null, used: Date.now(), pending: new Set(), events: false, scrollY: 0 });
-    order.push(key);
+    if (key === BACKUP) order.splice(1, 0, key); // next to Overview
+    else order.push(key);
     // Too many tabs: close the least recently used one (never the active tab).
-    const servers = order.filter((k) => k !== 'overview');
+    const servers = order.filter(isServer);
     if (servers.length > MAX_SERVER_TABS) {
       const candidates = servers.filter((k) => k !== active && k !== key).sort((a, b) => tabs.get(a).used - tabs.get(b).used);
       const lru = candidates.find((k) => !busy(k)) || candidates[0];
@@ -112,20 +116,27 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
 
   // The server list changed: rebuild the overview, refresh server tabs, drop tabs of removed servers.
   function serversChanged(exists) {
-    for (const key of [...order]) if (key !== 'overview' && !exists(key)) close(key);
+    for (const key of [...order]) if (isServer(key) && !exists(key)) close(key);
     const ov = tabs.get('overview');
     if (ov.view) {
       ov.view.destroy?.();
       ov.root.replaceChildren();
       ov.view = create('overview', ov.root);
     }
-    for (const t of tabs.values()) if (t.key !== 'overview' && t.view) notify(t.key);
+    for (const t of tabs.values()) if (isServer(t.key) && t.view) notify(t.key);
     renderStrip();
   }
 
+  // Snapshots arrive every few seconds: the strip is redrawn only when what it shows changed, or a click on a
+  // tab (or its close button) could land between the press and the release on an element that was just replaced.
+  let drawn = '';
   function renderStrip() {
+    const descs = order.map((key) => describe(key));
+    const sig = JSON.stringify([active, order, descs]);
+    if (sig === drawn) return;
+    drawn = sig;
     strip.replaceChildren(...order.map((key, i) => {
-      const d = describe(key);
+      const d = descs[i];
       const selected = key === active;
       const btn = h('div', {
         class: `app-tab${selected ? ' active' : ''}${key === 'overview' ? ' home' : ''}`,
@@ -139,16 +150,17 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
         oncontextmenu: (e) => openMenu(e, btn, [
           ...(key === 'overview' ? [] : [{ label: 'Close tab', action: () => requestClose(key) }]),
           { label: 'Close other tabs', action: async () => { for (const k of order.filter((x) => x !== key)) await requestClose(k); } },
-          { label: 'Close all server tabs', action: async () => { for (const k of order.filter((x) => x !== 'overview')) await requestClose(k); } },
+          { label: 'Close all server tabs', action: async () => { for (const k of order.filter(isServer)) await requestClose(k); } },
         ]),
       },
+      d.icon ? icon(d.icon) : null,
       d.dot ? h('i', { class: `tab-dot ${d.dot}` }) : null,
       h('span', { class: 'app-tab-title' }, d.title),
-      d.badge ? h('span', { class: 'tab-badge', title: d.badgeTitle }, d.badge) : null,
+      d.badge ? h('span', { class: `tab-badge ${d.badgeTone || ''}`, title: d.badgeTitle }, d.badge) : null,
       key === 'overview' ? null : h('button', {
         type: 'button', class: 'app-tab-close', 'aria-label': `Close ${d.title}`, title: 'Close (Ctrl+W)',
         onclick: () => requestClose(key),
-      }, '✕'));
+      }, icon('close')));
       return btn;
     }));
   }

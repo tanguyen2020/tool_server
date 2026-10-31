@@ -1,6 +1,7 @@
 import { h, fmtBytes, statusChip } from './util.js';
 import { drawMini } from './chart.js';
 import { openMenu } from './context-menu.js';
+import { isPostgresImage } from './databases.js';
 import { icon } from './icons.js';
 import { getJSONPref, setJSONPref } from './prefs.js';
 
@@ -62,7 +63,7 @@ function loadPrefs() {
   }
 }
 
-function containerRow({ onLogs, onInspect, onExec, onForward, forwardsOf, onRemove, onAction, sparkline, hostMemTotal, hostCores }) {
+function containerRow({ onLogs, onInspect, onExec, onForward, onDatabase, forwardsOf, onRemove, onAction, sparkline, hostMemTotal, hostCores }) {
   const chipCell = h('td');
   const nameEl = h('div', { class: 'c-name' });
   const imageEl = h('div', { class: 'c-image' });
@@ -107,6 +108,7 @@ function containerRow({ onLogs, onInspect, onExec, onForward, forwardsOf, onRemo
     openMenu(e, tr, [
       { label: 'Logs', action: () => onLogs(c) },
       ...(running ? [{ label: 'Exec (shell)', action: () => onExec(c) }, { label: 'Forward port…', action: () => onForward(e, tr, c) }] : []),
+      ...(running && onDatabase && isPostgresImage(c.image) ? [{ label: 'Postgres: back up or copy database…', action: () => onDatabase(c) }] : []),
       { label: 'Inspect', action: () => onInspect(c) },
       running ? { label: 'Stop', action: () => onAction(c, 'stop', buttons) } : { label: 'Start', action: () => onAction(c, 'start', buttons) },
       ...(running ? [{ label: 'Restart', action: () => onAction(c, 'restart', buttons) }] : []),

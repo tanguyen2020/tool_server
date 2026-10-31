@@ -11,7 +11,7 @@ import { openRunMany } from './runmany.js';
 import { openSnippets, snippetMenu } from './snippets.js';
 import { openActivity } from './activity.js';
 import { initUpdates } from './updates.js';
-import { createTabManager, hashFor } from './tabs.js';
+import { createTabManager, hashFor, BACKUP } from './tabs.js';
 import { openServerForm } from './server-form.js';
 import { openInspect } from './inspect.js';
 import { openMenu } from './context-menu.js';
@@ -20,6 +20,7 @@ import { containerMetricsTab } from './container-metrics.js';
 import { openAlertSettings, setAlertSettingsHandler } from './alert-settings.js';
 import { topProcessesPanel, maintenancePanel, dockerDiskPanel, diskExplorerPanel } from './server-extras.js';
 import { systemCleanupPanel, containerLogsPanel } from './cleanup.js';
+import { backupView, initBackupButton, backupNewJob, backupServersChanged, runningSummary, TAB_TITLE as BACKUP_TITLE } from './databases.js';
 import { call, on, confirmDialog } from './bridge.js';
 import { icon, setLabel } from './icons.js';
 import { initPrefs, getPref, setPref, getJSONPref, setJSONPref } from './prefs.js';
@@ -124,17 +125,22 @@ async function boot() {
   state.settings = data.settings;
   initPrefs(data.settings.ui);
   // The saved setting (settings.json) is the source of truth; the page's local copy only avoids a flash.
-  const savedTheme = data.settings.theme || 'system';
-  if (savedTheme !== currentTheme()) applyTheme(savedTheme, false);
+  // An old "system" setting is saved once as the theme Windows uses now, so the title bar matches it too.
+  const savedTheme = data.settings.theme;
+  if (savedTheme !== 'light' && savedTheme !== 'dark') applyTheme(explicitTheme(savedTheme), true);
+  else if (savedTheme !== currentTheme()) applyTheme(savedTheme, false);
   notifyToggle.checked = data.settings.notifications;
+  notifyToggle.parentElement.dataset.tip = notifyToggle.checked ? 'Desktop notifications: on' : 'Desktop notifications: off';
   initUpdates(state.settings, document.getElementById('version-btn'));
 
   tabs = createTabManager({
     strip: document.getElementById('tabs'),
     host: view,
-    create: (key, root) => (key === 'overview' ? overviewView(root) : detailView(key, root)),
+    create: (key, root) => (key === 'overview' ? overviewView(root)
+      : key === BACKUP ? backupView(root, { getServers: () => state.servers, getSnaps: () => state.snaps })
+        : detailView(key, root)),
     describe: describeTab,
-    onActivate: (key) => setDockServer(key),
+    onActivate: (key) => setDockServer(key === BACKUP ? 'overview' : key),
     onClose: (key) => closeDockServer(key),
     busy: (key) => dockTerminalCount(key) > 0,
     confirmClose: async (key) => {
@@ -152,6 +158,7 @@ async function boot() {
   on('servers', (list) => {
     state.servers = new Map(list.map((s) => [s.id, s]));
     tabs.serversChanged((id) => state.servers.has(id));
+    backupServersChanged();
   });
   on('removed', (id) => {
     state.snaps.delete(id);
@@ -165,7 +172,8 @@ async function boot() {
 
 // ---------------------------------------------------------------- Routing: the hash selects the tab
 function keyFromHash() {
-  const m = /^#\/server\/([\w-]+)/.exec(location.hash);
+  if (location.hash === '#/backup') return BACKUP;
+  const m =/^#\/server\/([\w-]+)/.exec(location.hash);
   return m && state.servers.has(m[1]) ? m[1] : 'overview';
 }
 window.addEventListener('hashchange', () => tabs?.activate(keyFromHash()));
@@ -174,7 +182,11 @@ window.addEventListener('hashchange', () => tabs?.activate(keyFromHash()));
 function describeTab(key) {
   if (key === 'overview') {
     const down = [...state.servers.keys()].filter((id) => state.snaps.get(id)?.status === 'offline').length;
-    return { title: '⌂ Overview', badge: down ? String(down) : '', badgeTitle: `${down} server${down > 1 ? 's' : ''} unreachable` };
+    return { title: 'Overview', icon: 'home', badge: down ? String(down) : '', badgeTitle: `${down} server${down > 1 ? 's' : ''} unreachable` };
+  }
+  if (key === BACKUP) {
+    const r = runningSummary();
+    return { title: 'Postgres Backup', icon: 'disk', dot: r ? 'good' : '', badge: r ? `${r.percent.toFixed(0)}%` : '', badgeTone: 'info', badgeTitle: r ? `${r.count} job${r.count > 1 ? 's' : ''} running` : '', tooltip: 'Back up, restore and copy PostgreSQL databases' };
   }
   const cfg = state.servers.get(key);
   const snap = state.snaps.get(key) || {};
@@ -443,7 +455,7 @@ function overviewView(root) {
 
   const viewBtns = [['cards', 'Cards'], ['list', 'List']].map(([k, label]) => h('button', {
     type: 'button', class: 'tab', 'data-view': k, onclick: () => { prefs.view = k; save(); build(); },
-  }, icon(k === 'cards' ? 'more' : 'logs'), label));
+  }, icon(k === 'cards' ? 'grid' : 'logs'), label));
   const sortSel = h('select', { 'aria-label': 'Sort servers' },
     ...[['issues', 'Problems first'], ['name', 'Name'], ['cpu', 'CPU'], ['mem', 'RAM'], ['disk', 'Disk'], ['load', 'Load']].map(([v, l]) => h('option', { value: v }, `Sort: ${l}`)));
   sortSel.value = prefs.sort;
@@ -989,6 +1001,7 @@ function detailView(id, root) {
     onInspect: (c) => openInspect(state.snaps.get(id), c),
     onExec: (c) => openTerminalFor(id, c.name),
     onForward: (e, anchor, c) => forwardContainer(e, anchor, id, c, serverName),
+    onDatabase: (c) => openBackupTab({ serverId: id, container: c.name }),
     forwardsOf: (c) => containerTunnels(id, c.name),
     onRemove: (c) => removeContainer(id, c),
     onAction: (c, action, buttons) => doAction(id, c, action, buttons),
@@ -1224,24 +1237,26 @@ function detailView(id, root) {
 // ---------------------------------------------------------------- Boot
 // Theme: System (follows Windows) -> Light -> Dark. The page applies it instantly (theme.js);
 // the Go side matches the native title bar and remembers it for the next start.
-const THEME_ORDER = ['system', 'light', 'dark'];
-const THEME_LABEL = { system: '◐ System', light: '☀ Light', dark: '☾ Dark' };
-const THEME_HINT = { system: 'Follows the Windows setting — click for Light', light: 'Light theme — click for Dark', dark: 'Dark theme — click to follow Windows' };
+// Light or dark only; an old "system" setting becomes what Windows uses now.
+const THEME_ORDER = ['light', 'dark'];
+const osTheme = () => (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+const explicitTheme = (t) => (t === 'light' || t === 'dark' ? t : osTheme());
+const THEME_ICON = { light: 'sun', dark: 'moon' };
+const THEME_HINT = { light: 'Light theme · click for dark', dark: 'Dark theme · click for light' };
 const themeBtn = document.getElementById('theme-toggle');
 function currentTheme() {
   try {
-    const t = localStorage.getItem('theme');
-    return t === 'light' || t === 'dark' ? t : 'system';
+    return explicitTheme(localStorage.getItem('theme'));
   } catch {
-    return 'system';
+    return osTheme();
   }
 }
 function applyTheme(mode, persist) {
   const root = document.documentElement;
-  if (mode === 'system') delete root.dataset.theme;
-  else root.dataset.theme = mode;
-  themeBtn.textContent = THEME_LABEL[mode];
-  themeBtn.title = THEME_HINT[mode];
+  mode = explicitTheme(mode);
+  root.dataset.theme = mode;
+  themeBtn.replaceChildren(icon(THEME_ICON[mode]));
+  themeBtn.dataset.tip = THEME_HINT[mode];
   themeBtn.setAttribute('aria-label', `Theme: ${mode}`);
   try { localStorage.setItem('theme', mode); } catch {}
   if (state.settings) state.settings = { ...state.settings, theme: mode };
@@ -1260,10 +1275,24 @@ document.addEventListener('visibilitychange', () => {
 });
 
 document.getElementById('alerts-btn').addEventListener('click', openAlertSettings);
-const currentServer = () => { const k = keyFromHash(); return k === 'overview' ? '' : k; };
+// Top bar: an icon in front of each action.
+for (const [btnId, name] of [['run-btn', 'zap'], ['snippets-btn', 'bookmark'], ['db-btn', 'disk'], ['activity-btn', 'clock'], ['alerts-btn', 'sliders']]) document.getElementById(btnId)?.prepend(icon(name));
+// Notifications: a bell, crossed out when they are off.
+notifyToggle.parentElement.append(icon('bell'), icon('bellOff'));
+notifyToggle.parentElement.lastChild.classList.add('off');
+const syncNotifyTip = () => { notifyToggle.parentElement.dataset.tip = notifyToggle.checked ? 'Desktop notifications: on' : 'Desktop notifications: off'; };
+notifyToggle.addEventListener('change', syncNotifyTip);
+const currentServer = () => { const k = keyFromHash(); return k === 'overview' || k === BACKUP ? '' : k; };
 document.getElementById('run-btn').addEventListener('click', () => openRunMany(state.servers, state.snaps, currentServer() ? [currentServer()] : []));
 document.getElementById('snippets-btn').addEventListener('click', () => openSnippets(state.servers, currentServer()));
 document.getElementById('activity-btn').addEventListener('click', () => openActivity(state.servers, currentServer()));
+initBackupButton(document.getElementById('db-btn'), () => openBackupTab(), () => tabs?.renderStrip());
+// Opens (or switches to) the Backup & Restore tab; preset fills the new-job form.
+function openBackupTab(preset) {
+  location.hash = hashFor(BACKUP);
+  tabs.activate(BACKUP);
+  if (preset) backupNewJob(preset);
+}
 const termSnippets = document.getElementById('term-snippets');
 termSnippets.addEventListener('click', (e) => snippetMenu(e, termSnippets, currentServer(), state.servers, (s) => {
   if (!pasteToTerminal(s.command)) toast('Open a terminal first', true);
@@ -1285,7 +1314,7 @@ initDock({ snapshot: (id) => state.snaps.get(id) });
   const tabbar = document.getElementById('tabs');
   let stickTop = 0;
   const measure = () => {
-    stickTop = topbar.offsetHeight + tabbar.offsetHeight;
+    stickTop = topbar.offsetHeight + (topbar.contains(tabbar) ? 0 : tabbar.offsetHeight); // the tabs sit in the top bar
     document.documentElement.style.setProperty('--topbar-h', `${topbar.offsetHeight}px`);
     document.documentElement.style.setProperty('--stick-top', `${stickTop}px`);
     markStuck();

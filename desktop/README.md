@@ -49,6 +49,29 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
   counters (`/proc/<pid>/net/dev`, cgroup v2 `io.stat`), falling back to `docker stats`; host-network containers are excluded from network.
 - **Container events timeline:** start, restart, stop, exit (with exit code), OOM kill and health changes from `docker events`,
   stored 7 days, listed on the Container metrics tab and drawn as markers on every chart (red = exit with an error, OOM, unhealthy).
+- **Postgres Backup & Restore tab** (button *Postgres Backup & Restore*, or right-click a postgres container → *Postgres: back up or copy database…*;
+  the new-job form on the left with searchable lists, every job as a live card on the right, several at once, details on demand;
+  tick several databases to copy or back up them in one go, or pick several backup files to restore, each with its own card
+  (the destination name of each can be changed;
+  backups go to one folder, one file each); *Start* asks how many databases run at a time (the others wait as Queued)
+  and the number of backup and restore workers per database, suggested from the CPU cores):
+  **copy** one database to another server, **back up** to a file on this computer (`.pgbackup.tar`) or **restore** a file
+  (also `pg_dump -Fc` files and tars of `pg_dump -Fd` folders). Runs in the database containers (`docker exec`), so the tools
+  always match the server version: `pg_dump -Fd -j N` (N = half the CPU cores by default, at most 8, so the server stays responsive) with zstd/lz4 (PostgreSQL 16+) or gzip, the folder streamed as tar through
+  this computer (the servers never need to reach each other), then `pg_restore -j N` with more `maintenance_work_mem`
+  and `synchronous_commit=off`. As soon as both ends are chosen, the app checks whether the target can log in to the source
+  database by itself (the source server's own addresses, private ones first, then its SSH address, with the port publishing
+  the container's 5432; the server's identity must match the source) and then ticks *The servers can reach each other*:
+  pg_dump runs in the target container and reads the source over the network, its login passed through SSH stdin into a
+  temporary pgpass file, so nothing goes through this computer. Unticking or ticking by hand overrides the check. Logs in with the container's own `POSTGRES_USER` / `POSTGRES_PASSWORD`. A preflight checks
+  logins, versions, free space and an existing target (stop, keep it renamed, or replace it only once the new copy is complete).
+  Live progress per step (back up, transfer, restore data, indexes) with speed and time left, the tables being copied
+  (from `pg_dump -v` / `pg_restore -v` and `pg_stat_progress_copy` on PostgreSQL 14+), then ANALYZE and an optional exact
+  row-count comparison. Nothing is left behind: the backup files on the source go as soon as they are transferred, those
+  on the target as soon as pg_restore is done, and the database is restored as `<name>_sdnew_<id>` and renamed only once
+  complete. Cancel or a failure stops the processes on both servers and removes the temporary files and that database. If the
+  app is killed mid-job, the next job on the same container removes those leftovers (jobs still running, from any computer,
+  are recognised by a heartbeat file and kept). Finished jobs are kept in `pgjobs.json` (last 50). End-to-end test: `PGDB_IT=1 go test ./internal/pgdb -run Integration`.
 - **Containers:** state, **health**, status with **exit code meaning**, published ports, CPU and RAM with 30-minute trend lines,
   **restart count** (with restart-loop detection: 3+ restarts in 10 minutes), net/block I/O; quick filters All / Running / Stopped /
   **Issues** (unhealthy, restart loop, restarting, abnormal exit); sortable columns; grouping by compose project; Start / Stop / Restart;

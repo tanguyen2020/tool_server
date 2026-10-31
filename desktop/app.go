@@ -37,6 +37,7 @@ type App struct {
 	terms terminals
 	tun   tunnels
 	runs  runs
+	pg    pgJobs
 	act   *activity.Log
 	upd   *updater.Updater
 
@@ -91,6 +92,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(context.Context) {
+	a.pgShutdown() // needs the SSH connections to clean up on the servers
 	a.cancel()
 	a.logsMu.Lock()
 	for _, stop := range a.logs {
