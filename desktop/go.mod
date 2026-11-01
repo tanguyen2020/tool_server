@@ -3,6 +3,7 @@ module serverdash
 go 1.27.0
 
 require (
+	filippo.io/age v1.3.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/pkg/sftp v1.13.11
 	github.com/wailsapp/wails/v2 v2.16.0
@@ -12,6 +13,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

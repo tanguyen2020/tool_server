@@ -111,6 +111,25 @@ INSERT INTO "odd name" SELECT generate_series(1, 10);
 CREATE VIEW sales.big AS SELECT * FROM sales.orders WHERE total > 900;
 CREATE MATERIALIZED VIEW sales.daily AS SELECT date_trunc('day', created) d, count(*) FROM sales.orders GROUP BY 1;
 `)
+	// Roles the database uses (an owner, a group with grants, a login in the group) and one it does not.
+	psqlIn(t, "sdit-a", "postgres", `
+CREATE ROLE shop_owner NOLOGIN;
+CREATE ROLE readers NOLOGIN;
+CREATE ROLE alice LOGIN PASSWORD 'alice-secret' CONNECTION LIMIT 7;
+GRANT readers TO alice;
+CREATE ROLE bob LOGIN;
+ALTER DATABASE shop SET work_mem = '8MB';
+ALTER ROLE alice IN DATABASE shop SET search_path = sales, public;
+COMMENT ON DATABASE shop IS 'Shop data';
+REVOKE ALL ON DATABASE shop FROM PUBLIC;
+GRANT CONNECT ON DATABASE shop TO readers;
+`)
+	psqlIn(t, "sdit-a", "shop", `
+ALTER SCHEMA sales OWNER TO shop_owner;
+ALTER TABLE sales.orders OWNER TO shop_owner;
+GRANT USAGE ON SCHEMA sales TO readers;
+GRANT SELECT ON customers, sales.orders TO readers;
+`)
 	// Containers reach the Docker host (and so the published port of A) as host.docker.internal.
 	a := &Side{Host: localHost{}, Docker: "docker", Server: "server-a", Address: "host.docker.internal"}
 	b := &Side{Host: localHost{}, Docker: "docker", Server: "server-b"}
@@ -169,6 +188,95 @@ CREATE MATERIALIZED VIEW sales.daily AS SELECT date_trunc('day', created) d, cou
 		t.Logf("copy: %.1fs, backup %s, log:\n%s", float64(v.Ended-v.Started)/1000, human(v.Summary.BackupBytes), strings.Join(v.Log[max(0, len(v.Log)-8):], "\n"))
 	})
 
+	t.Run("roles", func(t *testing.T) {
+		s := copySpec
+		s.File, s.Target.Database, s.Roles, s.Verify = "", "shop_roles", true, false
+		pf := RunPreflight(context.Background(), s, a, b)
+		if !pf.OK || pf.Roles == nil {
+			t.Fatalf("preflight: %+v", pf.Checks)
+		}
+		names := map[string]bool{}
+		for _, r := range pf.Roles.Create {
+			names[r.Name] = true
+		}
+		if !names["shop_owner"] || !names["readers"] || !names["alice"] || names["bob"] || names["app"] {
+			t.Fatalf("roles to create: %+v (existing %v)", pf.Roles.Create, pf.Roles.Existing)
+		}
+		v := runJob(t, s, a, b)
+		if v.State != "done" {
+			t.Fatalf("state %s: %s\nwarnings: %v\n%s", v.State, v.Error, v.Warnings, strings.Join(v.Log, "\n"))
+		}
+		if len(v.Summary.RolesCreated) != 3 {
+			t.Errorf("created: %v", v.Summary.RolesCreated)
+		}
+		checks := map[string]string{
+			"select count(*) from pg_roles where rolname = 'bob'":                                  "0",
+			"select rolconnlimit from pg_roles where rolname = 'alice'":                            "7",
+			"select pg_has_role('alice', 'readers', 'member')":                                     "t",
+			"select tableowner from pg_tables where schemaname = 'sales' and tablename = 'orders'": "shop_owner",
+			"select nspowner::regrole from pg_namespace where nspname = 'sales'":                   "shop_owner",
+			"select has_table_privilege('readers', 'customers', 'SELECT')":                         "t",
+			"select has_database_privilege('readers', current_database(), 'CONNECT')":              "t",
+			"select array_to_string(setconfig, ',') from pg_db_role_setting where setrole = 0 and setdatabase = (select oid from pg_database where datname = current_database())":                "work_mem=8MB",
+			"select array_to_string(setconfig, ',') from pg_db_role_setting where setrole = 'alice'::regrole and setdatabase = (select oid from pg_database where datname = current_database())": "search_path=sales, public",
+			"select shobj_description(oid, 'pg_database') from pg_database where datname = current_database()":                                                                                   "Shop data",
+			"select has_database_privilege('public', current_database(), 'CONNECT')":                                                                                                             "f",
+		}
+		for sql, want := range checks {
+			if got := psqlIn(t, "sdit-b", "shop_roles", sql); got != want {
+				t.Errorf("%s: %q, want %q", sql, got, want)
+			}
+		}
+		// The password hash travels as is, so alice logs in on B with her password.
+		hash := "select rolpassword from pg_authid where rolname = 'alice'"
+		if pa, pb := psqlIn(t, "sdit-a", "postgres", hash), psqlIn(t, "sdit-b", "postgres", hash); pa == "" || pa != pb {
+			t.Errorf("password hash: %q vs %q", pa, pb)
+		}
+		// Again: everything exists, nothing is created or changed.
+		s.Target.Database = "shop_roles2"
+		v = runJob(t, s, a, b)
+		if v.State != "done" || len(v.Summary.RolesCreated) != 0 || v.Summary.RolesExisting != 4 { // with app, the owner of the rest
+			t.Fatalf("second run: %s %s %+v %v", v.State, v.Error, v.Summary, v.Warnings)
+		}
+	})
+
+	t.Run("encrypted", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "shop.pgbackup.tar.age")
+		const pass = "a long passphrase"
+		s := Spec{Kind: "backup", Source: Endpoint{ServerID: "a", Container: "sdit-a", Database: "shop"}, File: file, Encrypt: true, Passphrase: pass}
+		v := runJob(t, s, a, nil)
+		if v.State != "done" || !v.Summary.Encrypted || v.Summary.SHA256 == "" || v.Spec.Passphrase != "" {
+			t.Fatalf("backup: %s %s %+v", v.State, v.Error, v.Summary)
+		}
+		if rep := VerifyBackupFile(context.Background(), file, pass); !rep.OK {
+			t.Fatalf("verify: %+v", rep.Checks)
+		}
+		r := Spec{Kind: "restore", Target: Endpoint{ServerID: "b", Container: "sdit-b", Database: "shop_enc"}, File: file, Passphrase: "wrong passphrase"}
+		if pf := RunPreflight(context.Background(), r, nil, b); pf.OK {
+			t.Fatalf("a wrong passphrase must fail the preflight: %+v", pf.Checks)
+		}
+		r.Passphrase, r.Roles = pass, true
+		v = runJob(t, r, nil, b)
+		if v.State != "done" || v.Summary.Checked < 3 {
+			t.Fatalf("restore: %s %s %+v\n%s", v.State, v.Error, v.Summary, strings.Join(v.Log, "\n"))
+		}
+		if got := psqlIn(t, "sdit-b", "shop_enc", "select count(*) from sales.orders"); got != "400000" {
+			t.Errorf("orders: %s", got)
+		}
+		// A damaged file is refused before anything is restored, and leaves nothing behind.
+		b2, _ := os.ReadFile(file)
+		b2[len(b2)/2] ^= 1
+		os.WriteFile(file, b2, 0o644)
+		r.Target.Database = "shop_damaged"
+		v = runJob(t, r, nil, b)
+		if v.State != "failed" || !strings.Contains(v.Error, "damaged") {
+			t.Fatalf("damaged: %s %s", v.State, v.Error)
+		}
+		if got := psqlIn(t, "sdit-b", "postgres", "select count(*) from pg_database where datname like 'shop_damaged%'"); got != "0" {
+			t.Errorf("a database was left behind")
+		}
+	})
+
 	t.Run("exists", func(t *testing.T) {
 		pf := RunPreflight(context.Background(), copySpec, a, b)
 		if pf.OK || !pf.TargetExists {
@@ -202,6 +310,9 @@ CREATE MATERIALIZED VIEW sales.daily AS SELECT date_trunc('day', created) d, cou
 		}
 		if got := psqlIn(t, "sdit-b", "shop_restored", `select count(*) from "odd name"`); got != "10" {
 			t.Errorf("odd name: %s", got)
+		}
+		if v.Summary.Checked < 3 {
+			t.Errorf("the files of the backup must be checked: %+v", v.Summary)
 		}
 	})
 

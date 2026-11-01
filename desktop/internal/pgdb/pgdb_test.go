@@ -8,12 +8,12 @@ import (
 
 func TestParseProbe(t *testing.T) {
 	out := "mdb=postgres\nuser=app\nnproc=8\nmem=16318644\ntmpfree=51200000\ndatafree=81200000\npgdump=pg_dump (PostgreSQL) 16.4\n@@SQL\n" +
-		"version\t160004\nsuper\tfalse\ttrue\nmaxconn\t100\nconns\t7\n" +
+		"version\t160004\nsuper\tfalse\ttrue\ttrue\nmaxconn\t100\nconns\t7\n" +
 		"db\tapp\t123456789\tUTF8\ten_US.utf8\ten_US.utf8\n" +
 		"db\tsecret\t-1\tUTF8\tC\tC\n"
 	var in Instance
 	parseProbe(&in, out)
-	if in.Error != "" || in.Version != 160004 || in.Major() != 16 || in.User != "app" || in.Superuser || !in.CreateDB {
+	if in.Error != "" || in.Version != 160004 || in.Major() != 16 || in.User != "app" || in.Superuser || !in.CreateDB || !in.CreateRole {
 		t.Fatalf("instance: %+v", in)
 	}
 	if in.Cores != 8 || in.TmpFreeKB != 51200000 || in.MaxConn != 100 || in.Conns != 7 || in.MaintDB != "postgres" {

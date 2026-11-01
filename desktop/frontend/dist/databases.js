@@ -48,6 +48,7 @@ const STEP = { prepare: 'Prepare', dump: 'Back up', transfer: 'Transfer', restor
 const DOING = { prepare: 'Preparing', dump: 'Backing up', transfer: 'Transferring', restore: 'Restoring data', indexes: 'Building indexes', finish: 'Finishing' };
 const versionText = (v) => (v >= 100000 ? `${Math.floor(v / 10000)}.${v % 10000}` : v > 0 ? `${Math.floor(v / 10000)}.${Math.floor(v / 100) % 100}` : '?');
 const baseName = (p) => (p || '').split(/[\\/]/).pop();
+const MIN_PASS = 8; // pgdb.MinPassLen
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const pill = (tone, text) => h('span', { class: `bk-pill ${tone}` }, text);
 
@@ -351,7 +352,78 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
   const chooseBtn = h('button', { type: 'button', class: 'btn' }, icon('folder'), 'Choose…');
   const fileBox = h('div', { class: 'bk-file' }, h('span', { class: 'bk-file-icon' }, icon('file')), filePath, chooseBtn);
   const keepCopy = toggle('Also keep a backup file on this computer', 'A copy of the transferred backup is saved as it goes by');
-  const fileArea = h('div', { class: 'bk-file-area' }, fileBox, fileInfoEl);
+
+  // Protection of the files on this computer: checksums always, encryption with a passphrase on request.
+  let savedPass = '';
+  const encrypt = toggle('Encrypt the backup file', 'With a passphrase (age). Without the passphrase the backup cannot be restored: keep it safe');
+  const pass1 = h('input', { type: 'password', class: 'bk-input', autocomplete: 'new-password', placeholder: `Passphrase (at least ${MIN_PASS} characters)`, 'aria-label': 'Passphrase' });
+  const pass2 = h('input', { type: 'password', class: 'bk-input', autocomplete: 'new-password', placeholder: 'Repeat the passphrase', 'aria-label': 'Repeat the passphrase' });
+  const rememberBox = () => h('input', { type: 'checkbox' });
+  const remember1 = rememberBox();
+  const passFields = h('div', { class: 'bk-pass' },
+    h('div', { class: 'bk-pass-row' }, pass1, pass2, showPassButton([pass1, pass2])),
+    h('label', { class: 'bk-inline-check' }, remember1, 'Remember the passphrase on this computer (protected by your Windows account)'));
+  const secureBox = h('div', { class: 'bk-secure' }, encrypt.el, passFields,
+    h('p', { class: 'bk-help' }, 'Every backup file carries the checksums of its contents, and a .sha256 file next to it the checksum of the whole file, so damage is found before a restore. An encrypted file can also be opened without this app: age -d file.age'));
+  encrypt.input.addEventListener('change', () => { syncSecure(); fixExtension(); });
+  function syncSecure() {
+    passFields.hidden = !encrypt.input.checked;
+    if (encrypt.input.checked && savedPass && !pass1.value) { pass1.value = pass2.value = savedPass; remember1.checked = true; }
+  }
+  // The name of a single backup file follows the choice: .pgbackup.tar.age when encrypted.
+  function fixExtension() {
+    if (!file || multiFile()) return;
+    if (encrypt.input.checked && !/\.age$/i.test(file)) setFile(`${file}.age`);
+    else if (!encrypt.input.checked && /\.pgbackup\.tar\.age$/i.test(file)) setFile(file.slice(0, -4));
+  }
+
+  // Restore: the passphrase of encrypted backups, which also reveals what is inside them.
+  const restorePass = h('input', { type: 'password', class: 'bk-input', autocomplete: 'current-password', placeholder: 'Passphrase of the encrypted backups', 'aria-label': 'Passphrase of the encrypted backups' });
+  const remember2 = rememberBox();
+  const unlockBtn = h('button', { type: 'button', class: 'btn' }, icon('lock'), 'Unlock');
+  const restoreSecure = h('div', { class: 'bk-secure' },
+    h('div', { class: 'bk-pass-row two' }, restorePass, showPassButton([restorePass]), unlockBtn),
+    h('label', { class: 'bk-inline-check' }, remember2, 'Remember the passphrase on this computer (protected by your Windows account)'));
+  async function unlock() {
+    const enc = files.filter((b) => b.encrypted);
+    if (!enc.length || !restorePass.value) return;
+    unlockBtn.disabled = true;
+    const renamed = new Map(enc.map((b) => [b.path, defaultName(b)]));
+    for (const b of enc) {
+      try {
+        const info = await call('PgReadBackupFile', b.path, restorePass.value);
+        Object.assign(b, info, { lockError: '' });
+      } catch (err) {
+        b.meta = null;
+        b.lockError = err.message;
+      }
+    }
+    unlockBtn.disabled = false;
+    paintFiles();
+    syncTargets(renamed);
+    updateSummary();
+  }
+  unlockBtn.addEventListener('click', unlock);
+  restorePass.addEventListener('change', unlock);
+  restorePass.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); unlock(); } });
+  call('PgSavedPassphrase').then((p) => {
+    savedPass = p || '';
+    if (!savedPass) return;
+    remember2.checked = true;
+    if (!restorePass.value) restorePass.value = savedPass;
+    syncSecure();
+  }).catch(() => {});
+  // After a start: remember or forget the passphrase as ticked.
+  async function rememberPass(pass, box) {
+    try {
+      if (box.checked && pass && pass !== savedPass) { await call('PgRememberPassphrase', pass); savedPass = pass; }
+      if (!box.checked && savedPass) { await call('PgRememberPassphrase', ''); savedPass = ''; }
+    } catch (err) {
+      toast(`Passphrase: ${err.message}`, true);
+    }
+  }
+
+  const fileArea = h('div', { class: 'bk-file-area' }, fileBox, fileInfoEl, secureBox, restoreSecure);
 
   let files = []; // restore: the chosen backups ({ path, bytes, format, meta })
   const setFile = (p) => {
@@ -359,8 +431,9 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     paintFile();
   };
   // The name a backup is restored as by default: the database it was made from.
-  const defaultName = (b) => (b.meta?.database || baseName(b.path).replace(/\.(pgbackup\.tar|tar|dump|backup)$/i, '').replace(/_\d{8}-\d{4}$/, '').replace(/[^A-Za-z0-9_]/g, '_')).slice(0, 50);
+  const defaultName = (b) => (b.meta?.database || baseName(b.path).replace(/\.age$/i, '').replace(/\.(pgbackup\.tar|tar|dump|backup)$/i, '').replace(/_\d{8}-\d{4}$/, '').replace(/[^A-Za-z0-9_]/g, '_')).slice(0, 50);
   function paintFiles() {
+    restoreSecure.hidden = kind !== 'restore' || !files.some((b) => b.encrypted);
     const total = files.reduce((t, b) => t + (b.bytes || 0), 0);
     filePath.replaceChildren(files.length
       ? h('span', { class: 'bk-file-name' }, files.length === 1 ? baseName(files[0].path) : `${files.length} backup files`)
@@ -369,10 +442,17 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     chooseBtn.lastChild.textContent = files.length ? 'Add files…' : 'Choose backups…';
     fileInfoEl.replaceChildren(...(files.length ? [h('div', { class: 'bk-files' }, ...files.map((b) => {
       const mt = b.meta;
-      const sub = [baseName(b.path), fmtBytes(b.bytes), mt && `from ${mt.server}`, mt && fmtWhen(mt.created), !mt && (b.format === 'custom' ? 'pg_dump archive' : 'pg_dump folder')].filter(Boolean).join(' · ');
+      const locked = b.encrypted && !b.format;
+      const sub = locked ? [baseName(b.path), fmtBytes(b.bytes), b.lockError || 'Encrypted: enter the passphrase below'].join(' · ')
+        : [baseName(b.path), fmtBytes(b.bytes), mt && `from ${mt.server}`, mt && fmtWhen(mt.created), !mt && (b.format === 'custom' ? 'pg_dump archive' : 'pg_dump folder')].filter(Boolean).join(' · ');
       return h('div', { class: 'bk-files-row' },
-        h('span', { class: 'bk-files-icon' }, icon('file')),
-        h('div', { class: 'bk-files-text' }, h('span', { class: 'bk-files-name' }, mt?.database || baseName(b.path)), h('span', { class: 'bk-files-sub', title: b.path }, sub)),
+        h('span', { class: 'bk-files-icon' }, icon(b.encrypted ? 'lock' : 'file')),
+        h('div', { class: 'bk-files-text' }, h('span', { class: 'bk-files-name' }, mt?.database || baseName(b.path),
+          b.encrypted ? h('span', { class: 'bk-pill sm info', title: 'Encrypted with a passphrase (age)' }, 'Encrypted') : '',
+          b.checksums || b.sidecar ? h('span', { class: 'bk-pill sm good', title: 'Checked against its checksums while it is uploaded' }, 'Checksums') : ''),
+        h('span', { class: `bk-files-sub${b.lockError ? ' bk-text-bad' : ''}`, title: b.path }, sub)),
+        h('button', { type: 'button', class: 'btn ghost icon sm verify', title: 'Verify the whole file now', 'aria-label': `Verify ${baseName(b.path)}`,
+          onclick: () => verifyFile(b.path, { encrypted: b.encrypted, passphrase: restorePass.value, bytes: b.bytes }) }, icon('shield')),
         h('button', { type: 'button', class: 'btn ghost icon sm', title: 'Remove', 'aria-label': `Remove ${baseName(b.path)}`, onclick: () => { files = files.filter((x) => x !== b); paintFiles(); syncTargets(); updateSummary(); } }, icon('close')));
     }))] : []));
   }
@@ -396,10 +476,14 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
         paintFiles();
         syncTargets();
         updateSummary();
+        if (files.some((b) => b.encrypted && !b.format)) {
+          if (restorePass.value) unlock();
+          else restorePass.focus();
+        }
       } else {
         const sv = source.value();
         const p = multiFile() ? await call('PgChooseFolder', 'Folder for the backup files')
-          : await call('PgChooseSaveFile', source.serverName() || 'server', sv.database || 'database');
+          : await call('PgChooseSaveFile', source.serverName() || 'server', sv.database || 'database', encrypt.input.checked);
         if (!p) { if (kind === 'copy' && !file) keepCopy.input.checked = false; syncFile(); return; }
         setFile(p);
         if (kind === 'copy') keepCopy.input.checked = true;
@@ -416,6 +500,9 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
   });
   function syncFile() {
     fileArea.hidden = kind === 'copy' && (!keepCopy.input.checked || directOn);
+    secureBox.hidden = kind === 'restore';
+    restoreSecure.hidden = kind !== 'restore' || !files.some((b) => b.encrypted);
+    syncSecure();
     updateSummary();
   }
 
@@ -504,22 +591,37 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
   const exclude = h('input', { class: 'bk-input', placeholder: 'e.g. public.audit_log, logs.*', spellcheck: 'false' });
   const analyze = toggle('Optimize after restore', 'Refresh query statistics so the database is fast right away', true);
   const verify = toggle('Verify row counts', 'Compare every table on both servers once the copy is done');
-  const owners = toggle('Keep owners and permissions', 'The same roles must exist on the destination');
+  const ownersSel = h('select', { class: 'bk-select' },
+    h('option', { value: 'none' }, 'Owned by the login of the destination'),
+    h('option', { value: 'keep' }, 'Keep them (the roles exist on the destination)'),
+    h('option', { value: 'roles' }, 'Keep them, and create the missing roles'));
+  const ownersHelp = h('p', { class: 'bk-help' });
+  const syncOwners = () => {
+    ownersHelp.textContent = {
+      none: 'Tables and other objects belong to the user the destination logs in with; grants are left out.',
+      keep: 'Owners and grants as on the source. Statements naming a role the destination lacks fail and are listed as warnings.',
+      roles: 'Roles the database uses are created where missing, with their memberships, passwords and settings, and the database gets its owner and privileges back. Roles that exist are not changed.',
+    }[ownersSel.value];
+  };
+  ownersSel.addEventListener('change', syncOwners);
   const schemaOnly = toggle('Structure only', 'Copy tables, views and functions without their rows');
   const optCompression = h('label', { class: 'bk-field' }, h('span', { class: 'bk-label' }, 'Compression'), compSel);
   const optExclude = h('label', { class: 'bk-field' }, h('span', { class: 'bk-label' }, 'Skip the rows of these tables'), exclude);
+  const optOwners = h('div', { class: 'bk-field bk-owners' }, h('label', { class: 'bk-field' }, h('span', { class: 'bk-label' }, 'Owners, permissions and roles'), ownersSel), ownersHelp);
   const advanced = h('details', { class: 'bk-disclosure bk-adv' }, h('summary', {}, icon('cog'), 'Advanced options'),
     h('div', { class: 'bk-adv-body' },
-      h('div', { class: 'bk-adv-fields' }, optCompression, optExclude),
-      h('div', { class: 'bk-toggles' }, analyze.el, verify.el, owners.el, schemaOnly.el)));
+      h('div', { class: 'bk-adv-fields' }, optCompression, optExclude, optOwners),
+      h('div', { class: 'bk-toggles' }, analyze.el, verify.el, schemaOnly.el)));
   if (spec0) {
     compSel.value = spec0.compression || 'auto';
     analyze.input.checked = spec0.analyze;
     verify.input.checked = spec0.verify;
-    owners.input.checked = spec0.keepOwners;
+    ownersSel.value = spec0.roles ? 'roles' : spec0.keepOwners ? 'keep' : 'none';
+    encrypt.input.checked = !!spec0.encrypt;
     schemaOnly.input.checked = spec0.schemaOnly;
     exclude.value = (spec0.excludeData || []).join(', ');
   }
+  syncOwners();
 
   // One page: numbered sections, then Check / Start at the bottom.
   const checksEl = h('div', { class: 'bk-checks' });
@@ -544,7 +646,7 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     syncFileMode();
     syncTargets();
     verify.el.hidden = kind !== 'copy';
-    analyze.el.hidden = owners.el.hidden = kind === 'backup';
+    analyze.el.hidden = optOwners.hidden = kind === 'backup';
     schemaOnly.el.hidden = optExclude.hidden = optCompression.hidden = kind === 'restore';
     renderPage();
     syncDirect();
@@ -571,7 +673,7 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
   }
 
   // The destination names follow the source databases until they are edited; a copy within one container gets "_copy".
-  function syncTargets() {
+  function syncTargets(renamed) {
     const sv = source.value();
     const tv = target.value();
     const same = sv.serverId && sv.serverId === tv.serverId && sv.container === tv.container;
@@ -580,6 +682,7 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
         labels: new Map(files.map((b) => [b.path, b.meta?.database ? `${b.meta.database} · ${baseName(b.path)}` : baseName(b.path)])),
         defaults: new Map(files.map((b) => [b.path, defaultName(b)])),
         head: 'Backup file',
+        renamed,
       });
       return;
     }
@@ -617,7 +720,10 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
       jobs: 0,
       restoreJobs: 0,
       compression: compSel.value,
-      keepOwners: owners.input.checked,
+      keepOwners: ownersSel.value !== 'none',
+      roles: ownersSel.value === 'roles',
+      encrypt: wantsFile() && encrypt.input.checked,
+      passphrase: kind === 'restore' ? restorePass.value : wantsFile() && encrypt.input.checked ? pass1.value : '',
       schemaOnly: schemaOnly.input.checked,
       excludeData: exclude.value.split(',').map((s) => s.trim()).filter(Boolean),
       analyze: analyze.input.checked,
@@ -649,6 +755,11 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     }
     if (kind === 'restore' && !files.length) return 'Choose the backup files to restore';
     if (wantsFile() && !file) return multiFile() ? 'Choose a folder for the backup files' : kind === 'backup' ? 'Choose where to save the backup' : 'Choose where to keep the backup file';
+    if (wantsFile() && encrypt.input.checked) {
+      if ([...pass1.value].length < MIN_PASS) return `Use a passphrase of at least ${MIN_PASS} characters to encrypt the backup`;
+      if (pass1.value !== pass2.value) return 'The two passphrases differ: type the same one twice';
+    }
+    if (kind === 'restore' && files.some((b) => b.encrypted) && !restorePass.value) return 'Enter the passphrase of the encrypted backups';
     const port = Number(directPort.value) || 0;
     if (kind === 'copy' && directOn && directPort.value.trim() && !(port > 0 && port < 65536)) return 'Enter a port between 1 and 65535';
     return '';
@@ -667,7 +778,6 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     return out;
   }
 
-  const checkRow = (level, text, title = '') => h('div', { class: `bk-check ${level}` }, icon(level === 'ok' ? 'check' : 'alert'), h('div', {}, title ? h('strong', {}, title) : '', title ? ' ' : '', text));
   const label = (s) => (kind === 'copy' ? (s.source.database === s.target.database ? s.source.database : `${s.source.database} → ${s.target.database}`)
     : kind === 'backup' ? s.source.database : s.target.database);
 
@@ -677,7 +787,7 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     const miss = missing(list);
     if (miss) { checksEl.replaceChildren(checkRow('error', miss)); return null; }
     if (wantsFile()) {
-      for (const s of list) s.file = multiFile() ? await call('PgBackupFileIn', file, source.serverName(), s.source.database) : file;
+      for (const s of list) s.file = multiFile() ? await call('PgBackupFileIn', file, source.serverName(), s.source.database, encrypt.input.checked) : file;
     }
     const busy = h('div', { class: 'bk-check busy' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('div', {}, list.length > 1 ? `Checking ${list.length} databases…` : 'Checking the servers…'));
     checksEl.replaceChildren(busy);
@@ -721,6 +831,8 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
       if (!choice) return;
       const ids = await call('PgStartMany', items.map((r) => ({ ...r.s, jobs: choice.jobs, restoreJobs: choice.restoreJobs })), choice.parallel);
       onStarted(ids);
+      if (kind === 'restore' && files.some((b) => b.encrypted)) rememberPass(restorePass.value, remember2);
+      else if (wantsFile() && encrypt.input.checked) rememberPass(pass1.value, remember1);
       checksEl.replaceChildren(checkRow('ok', ids.length > 1 ? `Started ${ids.length} jobs, ${choice.parallel} at a time. Follow them on the right.` : 'Started. Follow it on the right; you can set up another job meanwhile.'));
       if (kind === 'backup') setFile(''); // a new backup needs a new file name
       if (kind === 'restore') { files = []; paintFiles(); syncTargets(); updateSummary(); }
@@ -745,6 +857,51 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
 }
 
 const fact = (k, v) => h('div', { class: 'bk-fact' }, h('span', { class: 'bk-fact-k' }, k), h('span', { class: 'bk-fact-v' }, v));
+const checkRow = (level, text, title = '') => h('div', { class: `bk-check ${level}` }, icon(level === 'ok' ? 'check' : 'alert'), h('div', {}, title ? h('strong', {}, title) : '', title ? ' ' : '', text));
+
+// An eye button that shows or hides the passphrase fields.
+function showPassButton(inputs) {
+  const btn = h('button', { type: 'button', class: 'btn ghost icon', title: 'Show the passphrase', 'aria-label': 'Show the passphrase', 'aria-pressed': 'false' }, icon('eye'));
+  btn.addEventListener('click', () => {
+    const show = inputs[0].type === 'password';
+    for (const i of inputs) i.type = show ? 'text' : 'password';
+    btn.setAttribute('aria-pressed', String(show));
+    btn.title = show ? 'Hide the passphrase' : 'Show the passphrase';
+  });
+  return btn;
+}
+
+// Reads a whole backup file and shows what was checked: its SHA-256, its encryption, every file inside.
+function verifyFile(path, { encrypted = false, passphrase = '', bytes = 0 } = {}) {
+  const m = modal({ title: 'Verify a backup', sub: baseName(path), cls: 'bk-verify' });
+  const out = h('div', { class: 'bk-checks' });
+  const passIn = h('input', { type: 'password', class: 'bk-input', value: passphrase, autocomplete: 'current-password', 'aria-label': 'Passphrase' });
+  const go = h('button', { type: 'button', class: 'btn primary' }, icon('shield'), 'Verify');
+  let busy = false;
+  const run = async () => {
+    if (busy) return;
+    if (encrypted && !passIn.value) { passIn.focus(); return; }
+    busy = go.disabled = true;
+    out.replaceChildren(h('div', { class: 'bk-check busy' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }),
+      h('div', {}, `Reading the whole file${bytes ? ` (${fmtBytes(bytes)})` : ''}…`)));
+    let rep;
+    try {
+      rep = await call('PgVerifyFile', path, passIn.value);
+    } catch (err) {
+      rep = { ok: false, checks: [{ level: 'error', text: err.message }] };
+    }
+    busy = go.disabled = false;
+    out.replaceChildren(h('div', { class: `bk-verdict ${rep.ok ? 'good' : 'bad'}` }, icon(rep.ok ? 'shield' : 'alert'),
+      rep.ok ? 'The backup is intact and can be restored' : 'This backup is damaged or cannot be read'),
+    ...rep.checks.map((c) => checkRow(c.level, c.text)));
+  };
+  passIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+  m.body.append(encrypted ? h('label', { class: 'bk-field' }, h('span', { class: 'bk-label' }, 'Passphrase'), h('div', { class: 'bk-pass-row two' }, passIn, showPassButton([passIn]))) : '', out);
+  go.addEventListener('click', run);
+  m.foot.append(h('span', { class: 'bk-help' }, 'Nothing is changed; the file is only read.'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'btn ghost', onclick: () => m.close() }, 'Close'), go);
+  if (!encrypted || passphrase) run();
+  else passIn.focus();
+}
 
 // Start: the review in a dialog (route, databases, total size, speed). Resolves to the speed choice or null.
 function confirmStart(items, names) {
@@ -1080,6 +1237,10 @@ function endpointPicker({ role, servers, snaps, loadInstances, preset }) {
       mapHead = opts.head || 'Database';
       const dflt = (s) => opts.defaults?.get(s) ?? `${s}${sfx}`;
       for (const s of next) if (!names.has(s)) names.set(s, dflt(s));
+      // A default that changed (an encrypted backup was unlocked) replaces the old one unless it was edited.
+      for (const [s, old] of opts.renamed || []) {
+        if (names.get(s) === old && dflt(s) !== old) { names.set(s, dflt(s)); mapKey = ''; }
+      }
       if (next.length === 1 && !touched) dbIn.value = dflt(next[0]);
       // Redraw the rows only when the list itself changed: typing in a row must keep its focus.
       const key = JSON.stringify([next, sfx, mapHead]);
@@ -1256,6 +1417,13 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
       btns.push(cancel);
     } else {
       if (v.spec.file && v.state !== 'failed' && v.state !== 'cancelled') {
+        if (v.spec.kind !== 'restore') {
+          btns.push(h('button', { type: 'button', class: 'btn ghost icon sm', title: 'Verify the backup file', 'aria-label': 'Verify the backup file', onclick: async () => {
+            const enc = !!(v.summary?.encrypted || v.spec.encrypt);
+            const pass = enc ? await call('PgSavedPassphrase').catch(() => '') : '';
+            verifyFile(v.spec.file, { encrypted: enc, passphrase: pass, bytes: v.summary?.backupBytes || 0 });
+          } }, icon('shield')));
+        }
         btns.push(h('button', { type: 'button', class: 'btn ghost icon sm', title: 'Show the backup file', 'aria-label': 'Show the backup file', onclick: () => call('PgShowFile', v.spec.file).catch((e) => toast(e.message, true)) }, icon('folder')));
       }
       btns.push(h('button', { type: 'button', class: 'btn ghost icon sm', title: 'Run again (fills the form)', 'aria-label': 'Run again', onclick: () => onAgain(v.spec) }, icon('restart')));
@@ -1282,6 +1450,12 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
     if (par) add('Workers', par);
     if (sm.compression) add('Compression', sm.compression);
     if (s.file && s.kind !== 'restore') add('File', h('span', { class: 'jc-path', title: s.file }, s.file));
+    if (sm.encrypted) add('Encryption', 'age, with a passphrase');
+    if (sm.sha256) add('SHA-256', h('span', { class: 'jc-path mono', title: `${sm.sha256} (also in the .sha256 file next to the backup)` }, `${sm.sha256.slice(0, 16)}…`));
+    if (sm.checked) add('Checksums', h('span', { class: 'bk-text-good' }, `all ${sm.checked} files match`));
+    if (s.kind !== 'backup' && s.keepOwners) add('Owners', s.roles ? 'kept, missing roles created' : 'kept');
+    if (sm.rolesCreated?.length) add('Roles created', h('span', { title: sm.rolesCreated.join(', ') }, sm.rolesCreated.join(', ')));
+    else if (s.roles && sm.rolesExisting) add('Roles', `all ${sm.rolesExisting} existed already`);
     if (sm.verified) add('Row counts', sm.mismatches?.length ? h('span', { class: 'bk-text-bad' }, `${sm.mismatches.length} of ${sm.verified} tables differ`) : h('span', { class: 'bk-text-good' }, `all ${sm.verified} tables match`));
     const parts = [h('div', { class: 'bk-facts' }, ...items)];
     if (sm.mismatches?.length) {

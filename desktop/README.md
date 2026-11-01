@@ -65,6 +65,18 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
   pg_dump runs in the target container and reads the source over the network, its login passed through SSH stdin into a
   temporary pgpass file, so nothing goes through this computer. Unticking or ticking by hand overrides the check. Logs in with the container's own `POSTGRES_USER` / `POSTGRES_PASSWORD`. A preflight checks
   logins, versions, free space and an existing target (stop, keep it renamed, or replace it only once the new copy is complete).
+  **Backup files are protected:** every file ends with `sd-checksums.sha256` (the SHA-256 of each file inside) and gets a
+  `<file>.sha256` next to it (the SHA-256 of the whole file, `sha256sum -c` works); *Encrypt the backup file* encrypts it with
+  a passphrase using [age](https://age-encryption.org) (`.pgbackup.tar.age`, authenticated, `age -d` opens it without this app).
+  A restore decrypts and checks everything while uploading and stops before pg_restore if anything is damaged; *Verify* (on a
+  backup card or a chosen file) reads a whole file and reports. The passphrase is never stored in the job history; it can be
+  remembered on this computer (DPAPI, like the server passwords).
+  **Owners, permissions and roles** (advanced options): owned by the destination login (default), kept as on the source,
+  or kept with the **missing roles created**: the roles that own objects or hold privileges in the database, their members
+  and the roles they belong to, with attributes, memberships, role settings and password hashes (when the source login is a
+  superuser). Roles that already exist are never changed. The database also gets its owner, privileges, settings
+  (`ALTER DATABASE … SET`, `ALTER ROLE … IN DATABASE … SET`), connection limit and comment back, which pg_dump leaves out.
+  Backups always carry these in `sd-backup.json`, so a restore can create the roles too.
   Live progress per step (back up, transfer, restore data, indexes) with speed and time left, the tables being copied
   (from `pg_dump -v` / `pg_restore -v` and `pg_stat_progress_copy` on PostgreSQL 14+), then ANALYZE and an optional exact
   row-count comparison. Nothing is left behind: the backup files on the source go as soon as they are transferred, those

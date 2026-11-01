@@ -2,11 +2,14 @@ package pgdb
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,12 +31,15 @@ type Spec struct {
 	Kind        string   `json:"kind"` // copy (A → B), backup (A → file on this computer), restore (file → B)
 	Source      Endpoint `json:"source"`
 	Target      Endpoint `json:"target"`
-	File        string   `json:"file"`        // backup: where to save; copy: optional local copy; restore: the file to read
-	IfExists    string   `json:"ifExists"`    // target database exists: stop, replace (dropped after a good restore), keep (renamed)
-	Jobs        int      `json:"jobs"`        // parallel jobs of the backup (and of the restore unless RestoreJobs is set), 0 = auto
-	RestoreJobs int      `json:"restoreJobs"` // parallel jobs of the restore, 0 = like Jobs
-	Compression string   `json:"compression"` // auto, zstd, lz4, gzip, none
-	KeepOwners  bool     `json:"keepOwners"`  // restore owners and grants (the roles must exist on the target)
+	File        string   `json:"file"`                 // backup: where to save; copy: optional local copy; restore: the file to read
+	IfExists    string   `json:"ifExists"`             // target database exists: stop, replace (dropped after a good restore), keep (renamed)
+	Jobs        int      `json:"jobs"`                 // parallel jobs of the backup (and of the restore unless RestoreJobs is set), 0 = auto
+	RestoreJobs int      `json:"restoreJobs"`          // parallel jobs of the restore, 0 = like Jobs
+	Compression string   `json:"compression"`          // auto, zstd, lz4, gzip, none
+	KeepOwners  bool     `json:"keepOwners"`           // restore owners and grants (the roles must exist on the target)
+	Roles       bool     `json:"roles"`                // with KeepOwners: create the roles the target lacks (see roles.go)
+	Encrypt     bool     `json:"encrypt"`              // the backup file on this computer is encrypted with Passphrase
+	Passphrase  string   `json:"passphrase,omitempty"` // encrypts the file, or decrypts the one to restore; never stored
 	SchemaOnly  bool     `json:"schemaOnly"`
 	ExcludeData []string `json:"excludeData"` // table patterns (pg_dump -T syntax) whose rows are skipped
 	Analyze     bool     `json:"analyze"`     // update planner statistics after the restore
@@ -111,6 +117,18 @@ func (s *Spec) Validate() error {
 	if s.Kind != "copy" {
 		s.Verify = false
 	}
+	if s.Roles {
+		s.KeepOwners = true
+	}
+	if s.Kind == "restore" || s.File == "" {
+		s.Encrypt = false
+	}
+	if s.Encrypt && len([]rune(s.Passphrase)) < MinPassLen {
+		return fmt.Errorf("use a passphrase of at least %d characters", MinPassLen)
+	}
+	if !s.Encrypt && s.Kind != "restore" {
+		s.Passphrase = ""
+	}
 	if s.Kind != "copy" || sameContainer(*s) {
 		s.Direct = false
 	}
@@ -144,6 +162,10 @@ type Meta struct {
 	Created   int64   `json:"created"`
 	Schema    bool    `json:"schemaOnly"`
 	Tables    []Table `json:"tables"`
+	// Checksums says that a backup file made from this dump ends with sd-checksums.sha256 (see seal.go),
+	// so a file without it is incomplete.
+	Checksums bool     `json:"checksums,omitempty"`
+	Globals   *Globals `json:"globals,omitempty"` // roles and database properties (see roles.go)
 }
 
 const metaName = "sd-backup.json"
@@ -186,6 +208,11 @@ type Summary struct {
 	Compression   string     `json:"compression"`
 	FinalDatabase string     `json:"finalDatabase"`
 	OldDatabase   string     `json:"oldDatabase"` // the previous target database, renamed (IfExists keep)
+	RolesCreated  []string   `json:"rolesCreated,omitempty"`
+	RolesExisting int        `json:"rolesExisting,omitempty"`
+	Encrypted     bool       `json:"encrypted,omitempty"` // the backup file is encrypted
+	SHA256        string     `json:"sha256,omitempty"`    // of the backup file as saved
+	Checked       int        `json:"checked,omitempty"`   // restore: files in the backup whose checksum matched
 }
 
 // View is what the UI shows of a job.
@@ -249,6 +276,7 @@ func New(id string, spec Spec, src, dst *Side, changed func()) (*Job, error) {
 	}
 	j := &Job{ID: id, spec: spec, src: src, dst: dst, changed: changed, rates: map[string]*rateMeter{}, dir: "/tmp/sd-" + id, format: "dir", done: make(chan struct{})}
 	j.v = View{ID: id, Spec: spec, State: "running", Warnings: []string{}, Log: []string{}, Active: []Active{}, Started: time.Now().UnixMilli()}
+	j.v.Spec.Passphrase = "" // the view is shown and saved
 	add := func(key, label, unit string, w float64) {
 		j.v.Phases = append(j.v.Phases, Phase{Key: key, Label: label, State: "pending", Unit: unit, ETA: -1, weight: w})
 	}
@@ -505,14 +533,20 @@ func (j *Job) run(ctx context.Context) error {
 		}
 		j.srcInfo = in
 		j.meta = Meta{Format: 1, Database: db.Name, Server: j.src.Server, Container: in.Container, Version: in.Version, PgDump: in.PgDump,
-			Encoding: db.Encoding, Collate: db.Collate, Ctype: db.Ctype, Bytes: db.Bytes, Created: time.Now().UnixMilli(), Schema: s.SchemaOnly}
+			Encoding: db.Encoding, Collate: db.Collate, Ctype: db.Ctype, Bytes: db.Bytes, Created: time.Now().UnixMilli(), Schema: s.SchemaOnly,
+			Checksums: s.File != ""}
+		if g, err := readGlobals(ctx, *j.src, s.Source.Container, db.Name, in.Version, in.Superuser); err != nil {
+			j.warn("Could not read the roles and database settings of the source: " + err.Error())
+		} else {
+			j.meta.Globals = g
+		}
 		j.mu.Lock()
 		j.v.Summary.DatabaseBytes, j.v.Summary.SourceVersion = db.Bytes, in.Version
 		j.mu.Unlock()
 		j.log(fmt.Sprintf("Source: %s / %s / %s (PostgreSQL %s, %s)", j.src.Server, in.Container, db.Name, VersionText(in.Version), human(db.Bytes)))
 	}
 	if s.Kind == "restore" {
-		info, err := ReadBackupFile(s.File)
+		info, err := ReadBackupFileWith(s.File, s.Passphrase)
 		if err != nil {
 			return err
 		}
@@ -521,7 +555,7 @@ func (j *Job) run(ctx context.Context) error {
 			j.meta = *info.Meta
 		}
 		j.mu.Lock()
-		j.v.Summary.BackupBytes, j.v.Summary.SourceVersion = info.Bytes, j.meta.Version
+		j.v.Summary.BackupBytes, j.v.Summary.SourceVersion, j.v.Summary.Encrypted = info.Bytes, j.meta.Version, info.Encrypted
 		j.mu.Unlock()
 	}
 	if s.hasTarget() {
@@ -982,7 +1016,9 @@ func (j *Job) transfer(ctx context.Context) error {
 	}
 	j.begin("transfer", total, label)
 
-	var local *os.File
+	// The backup file is written as <file>.part (with checksums, encrypted when asked) and renamed once complete.
+	var file *os.File
+	var sink *fileSink
 	part := ""
 	if s.File != "" && s.Kind != "restore" {
 		part = s.File + ".part"
@@ -990,10 +1026,18 @@ func (j *Job) transfer(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		local = f
+		file = f
+		if sink, err = newFileSink(f, s.Passphrase); err != nil {
+			f.Close()
+			os.Remove(part)
+			return err
+		}
 		defer func() {
-			if local != nil {
-				local.Close()
+			if sink != nil {
+				sink.Abort()
+			}
+			if file != nil {
+				file.Close()
 				os.Remove(part)
 			}
 		}()
@@ -1001,26 +1045,43 @@ func (j *Job) transfer(ctx context.Context) error {
 	counter := writerFunc(func(p []byte) (int, error) { j.moved.Add(int64(len(p))); return len(p), nil })
 
 	var err error
+	var check *streamCheck
 	switch s.Kind {
 	case "backup":
-		err = j.src.Host.Run(ctx, dexec(j.src.Docker, s.Source.Container, false, fmt.Sprintf(tarOut, j.dir)), nil, io.MultiWriter(local, counter), &tailBuf{})
+		err = j.src.Host.Run(ctx, dexec(j.src.Docker, s.Source.Container, false, fmt.Sprintf(tarOut, j.dir)), nil, io.MultiWriter(sink, counter), &tailBuf{})
 	case "restore":
-		var f *os.File
-		f, err = os.Open(s.File)
+		var in io.Reader
+		var finish func(ok bool) error
+		in, check, finish, err = j.openUpload()
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer check.Wait() // no-op once waited for
 		dest := "rm -rf " + j.dir + " && mkdir -p " + j.dir + " && exec tar -xf - -C " + j.dir
 		if j.format == "custom" {
 			dest = "rm -rf " + j.dir + " && mkdir -p " + j.dir + " && exec cat > " + j.dir + "/backup.dump"
 		}
 		stderr := &tailBuf{}
-		err = j.dst.Host.Run(ctx, dexec(j.dst.Docker, s.Target.Container, true, dest), io.TeeReader(f, counter), io.Discard, stderr)
-		if err != nil && stderr.String() != "" {
+		rec := &errReader{r: in}
+		err = j.dst.Host.Run(ctx, dexec(j.dst.Docker, s.Target.Container, true, dest), rec, io.Discard, stderr)
+		// A file that cannot be read or decrypted makes the target fail too; the file is the cause.
+		switch {
+		case err == nil:
+		case rec.err != nil:
+			err = fmt.Errorf("the backup file is damaged or was changed: %w", rec.err)
+		case check.Wait().err() != nil:
+			err = check.Wait().err()
+		case stderr.String() != "":
 			err = errors.New(friendly(stderr.String()))
 		}
+		if ferr := finish(err == nil); err == nil {
+			err = ferr
+		}
 	case "copy":
+		var local io.Writer
+		if sink != nil {
+			local = sink
+		}
 		err = j.relay(ctx, local, counter)
 	}
 	if err != nil {
@@ -1029,25 +1090,92 @@ func (j *Job) transfer(ctx context.Context) error {
 		}
 		return fmt.Errorf("transfer failed: %w", err)
 	}
-	if local != nil {
-		if err := local.Close(); err != nil {
-			local = nil
-			os.Remove(part)
+	if check != nil {
+		c := check.Wait()
+		if err := c.err(); err != nil {
 			return err
 		}
-		local = nil
+		if c.HasSums {
+			j.mu.Lock()
+			j.v.Summary.Checked = c.Checked
+			j.mu.Unlock()
+			j.log(fmt.Sprintf("All %d files of the backup match their checksums", c.Checked))
+		}
+	}
+	if file != nil {
+		sum, err := sink.Close()
+		sink = nil
+		if err != nil {
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+		file = nil
 		os.Remove(s.File)
 		if err := os.Rename(part, s.File); err != nil {
 			return err
 		}
-		j.log("Saved " + s.File)
+		if err := writeSidecar(s.File, sum); err != nil {
+			j.warn("Could not write " + sidecarPath(s.File) + ": " + err.Error())
+		}
+		j.mu.Lock()
+		j.v.Summary.SHA256, j.v.Summary.Encrypted = sum, s.Encrypt
+		j.mu.Unlock()
+		j.log("Saved " + s.File + map[bool]string{true: " (encrypted)", false: ""}[s.Encrypt] + ", SHA-256 " + sum)
 	}
 	j.progress("transfer", j.moved.Load(), j.moved.Load())
 	return nil
 }
 
+// openUpload opens the backup file to restore: decrypted when needed, its SHA-256 compared with the
+// sidecar file and (for a .pgbackup.tar) every member checked as it goes by. After a good upload,
+// finish(true) reads what the target left (so the end of an encrypted file is authenticated too) and
+// compares the SHA-256; check reports on the members.
+func (j *Job) openUpload() (in io.Reader, check *streamCheck, finish func(ok bool) error, err error) {
+	f, err := os.Open(j.spec.File)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	whole := sha256.New()
+	counter := writerFunc(func(p []byte) (int, error) { j.moved.Add(int64(len(p))); return len(p), nil })
+	raw := io.TeeReader(f, io.MultiWriter(whole, counter))
+	in = raw
+	if isEncrypted(j.spec.File) {
+		if in, err = decrypt(raw, j.spec.Passphrase); err != nil {
+			f.Close()
+			return nil, nil, nil, err
+		}
+	}
+	if j.format == "dir" {
+		check = newStreamCheck(j.meta.Checksums)
+		in = io.TeeReader(in, check)
+	}
+	want := readSidecar(j.spec.File)
+	finish = func(ok bool) error {
+		defer f.Close()
+		if !ok {
+			return nil
+		}
+		if _, err := io.Copy(io.Discard, in); err != nil {
+			return fmt.Errorf("the backup file is damaged: %w", err)
+		}
+		if _, err := io.Copy(io.Discard, raw); err != nil {
+			return err
+		}
+		if want != "" {
+			if got := hex.EncodeToString(whole.Sum(nil)); got != want {
+				return fmt.Errorf("the backup file is damaged: its SHA-256 does not match %s", filepath.Base(sidecarPath(j.spec.File)))
+			}
+			j.log("The SHA-256 of the backup file matches " + filepath.Base(sidecarPath(j.spec.File)))
+		}
+		return nil
+	}
+	return in, check, finish, nil
+}
+
 // relay streams the dump from the source container to the target container (and to a local copy).
-func (j *Job) relay(ctx context.Context, local *os.File, counter io.Writer) error {
+func (j *Job) relay(ctx context.Context, local io.Writer, counter io.Writer) error {
 	s := j.spec
 	pr, pw := io.Pipe()
 	ctx, cancel := context.WithCancel(ctx)
@@ -1085,6 +1213,20 @@ func (j *Job) relay(ctx context.Context, local *os.File, counter io.Writer) erro
 		return srcErr
 	}
 	return dstErr
+}
+
+// errReader remembers the first error of a reader other than EOF.
+type errReader struct {
+	r   io.Reader
+	err error
+}
+
+func (e *errReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil && err != io.EOF && e.err == nil {
+		e.err = err
+	}
+	return n, err
 }
 
 type writerFunc func([]byte) (int, error)
@@ -1188,6 +1330,12 @@ func (j *Job) restore(ctx context.Context) error {
 	j.mu.Unlock()
 	j.progress("restore", 0, tr.total)
 
+	if s.Roles {
+		j.detail("restore", "Creating the roles the target lacks")
+		if err := j.createRoles(ctx); err != nil {
+			return err
+		}
+	}
 	db := j.workDB()
 	if err := j.createDatabase(ctx, db); err != nil {
 		return err
@@ -1361,6 +1509,7 @@ func (j *Job) finish(ctx context.Context) error {
 		step++
 		j.progress("finish", step, -1)
 	}
+	j.databaseProps(ctx, db)
 	final := s.Target.Database
 	if !j.targetExisted() {
 		j.detail("finish", "Naming the database "+final)
@@ -1499,7 +1648,7 @@ func human(b int64) string {
 }
 
 // DefaultFileName suggests a name for a backup file.
-func DefaultFileName(server, db string, t time.Time) string {
+func DefaultFileName(server, db string, t time.Time, encrypted bool) string {
 	clean := func(s string) string {
 		return strings.Map(func(r rune) rune {
 			if r == '-' || r == '_' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
@@ -1508,5 +1657,9 @@ func DefaultFileName(server, db string, t time.Time) string {
 			return '_'
 		}, s)
 	}
-	return fmt.Sprintf("%s_%s_%s.pgbackup.tar", clean(db), clean(server), t.Format("20060102-1504"))
+	name := fmt.Sprintf("%s_%s_%s.pgbackup.tar", clean(db), clean(server), t.Format("20060102-1504"))
+	if encrypted {
+		name += ".age"
+	}
+	return name
 }

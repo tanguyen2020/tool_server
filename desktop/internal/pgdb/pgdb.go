@@ -150,22 +150,23 @@ type Database struct {
 
 // Instance is a PostgreSQL server running in a container.
 type Instance struct {
-	Container string     `json:"container"`
-	Image     string     `json:"image"`
-	Version   int        `json:"version"` // server_version_num, e.g. 160004
-	User      string     `json:"user"`
-	Superuser bool       `json:"superuser"`
-	CreateDB  bool       `json:"createdb"`
-	MaintDB   string     `json:"maintDb"` // database to connect to for CREATE/DROP DATABASE
-	Cores     int        `json:"cores"`
-	MemKB     int64      `json:"memKb"`
-	TmpFreeKB int64      `json:"tmpFreeKb"`  // free space for the dump folder
-	DataFree  int64      `json:"dataFreeKb"` // free space where the databases are stored
-	MaxConn   int        `json:"maxConn"`
-	Conns     int        `json:"conns"`
-	PgDump    string     `json:"pgDump"`
-	Databases []Database `json:"databases"`
-	Error     string     `json:"error,omitempty"` // could not log in or query
+	Container  string     `json:"container"`
+	Image      string     `json:"image"`
+	Version    int        `json:"version"` // server_version_num, e.g. 160004
+	User       string     `json:"user"`
+	Superuser  bool       `json:"superuser"`
+	CreateDB   bool       `json:"createdb"`
+	CreateRole bool       `json:"createrole"`
+	MaintDB    string     `json:"maintDb"` // database to connect to for CREATE/DROP DATABASE
+	Cores      int        `json:"cores"`
+	MemKB      int64      `json:"memKb"`
+	TmpFreeKB  int64      `json:"tmpFreeKb"`  // free space for the dump folder
+	DataFree   int64      `json:"dataFreeKb"` // free space where the databases are stored
+	MaxConn    int        `json:"maxConn"`
+	Conns      int        `json:"conns"`
+	PgDump     string     `json:"pgDump"`
+	Databases  []Database `json:"databases"`
+	Error      string     `json:"error,omitempty"` // could not log in or query
 }
 
 // Major returns the major version (16 for 160004, 9 for 90624).
@@ -203,7 +204,7 @@ echo "pgdump=$(pg_dump --version 2>&1 | head -n 1)"
 echo "@@SQL"
 psql -XAtq -v ON_ERROR_STOP=1 -F "$T" -d "$MDB" 2>&1 <<'SQL'
 select 'version', current_setting('server_version_num');
-select 'super', rolsuper::text, rolcreatedb::text from pg_roles where rolname = current_user;
+select 'super', rolsuper::text, rolcreatedb::text, rolcreaterole::text from pg_roles where rolname = current_user;
 select 'maxconn', current_setting('max_connections');
 select 'conns', count(*)::text from pg_stat_activity;
 select 'db', datname,
@@ -306,8 +307,8 @@ func parseProbe(in *Instance, out string) {
 		switch {
 		case f[0] == "version" && len(f) == 2:
 			in.Version, _ = strconv.Atoi(f[1])
-		case f[0] == "super" && len(f) == 3:
-			in.Superuser, in.CreateDB = f[1] == "true", f[2] == "true"
+		case f[0] == "super" && len(f) == 4:
+			in.Superuser, in.CreateDB, in.CreateRole = f[1] == "true", f[2] == "true", f[3] == "true"
 		case f[0] == "maxconn" && len(f) == 2:
 			in.MaxConn, _ = strconv.Atoi(f[1])
 		case f[0] == "conns" && len(f) == 2:

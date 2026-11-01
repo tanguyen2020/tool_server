@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 	"serverdash/internal/monitor"
 	"serverdash/internal/pgdb"
+	"serverdash/internal/secret"
 	"serverdash/internal/sshpool"
 )
 
@@ -285,11 +287,15 @@ func (a *App) PgForget(id string) {
 }
 
 // PgChooseSaveFile asks where to save a backup.
-func (a *App) PgChooseSaveFile(serverName, database string) (string, error) {
+func (a *App) PgChooseSaveFile(serverName, database string, encrypt bool) (string, error) {
+	filter := runtime.FileFilter{DisplayName: "PostgreSQL backup (*.pgbackup.tar)", Pattern: "*.pgbackup.tar"}
+	if encrypt {
+		filter = runtime.FileFilter{DisplayName: "Encrypted PostgreSQL backup (*.pgbackup.tar.age)", Pattern: "*.age"}
+	}
 	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "Save the backup of " + database,
-		DefaultFilename: pgdb.DefaultFileName(serverName, database, time.Now()),
-		Filters:         []runtime.FileFilter{{DisplayName: "PostgreSQL backup (*.pgbackup.tar)", Pattern: "*.pgbackup.tar"}},
+		DefaultFilename: pgdb.DefaultFileName(serverName, database, time.Now(), encrypt),
+		Filters:         []runtime.FileFilter{filter},
 	})
 }
 
@@ -299,8 +305,49 @@ func (a *App) PgChooseFolder(title string) (string, error) {
 }
 
 // PgBackupFileIn names the backup file of a database in a folder.
-func (a *App) PgBackupFileIn(folder, serverName, database string) string {
-	return filepath.Join(folder, pgdb.DefaultFileName(serverName, database, time.Now()))
+func (a *App) PgBackupFileIn(folder, serverName, database string, encrypt bool) string {
+	return filepath.Join(folder, pgdb.DefaultFileName(serverName, database, time.Now(), encrypt))
+}
+
+// PgReadBackupFile describes a backup file; an encrypted one is decrypted with the passphrase.
+func (a *App) PgReadBackupFile(path, passphrase string) (pgdb.FileInfo, error) {
+	return pgdb.ReadBackupFileWith(path, passphrase)
+}
+
+// PgVerifyFile reads a whole backup file and checks its checksums and encryption.
+func (a *App) PgVerifyFile(path, passphrase string) pgdb.VerifyReport {
+	return pgdb.VerifyBackupFile(a.ctx, path, passphrase)
+}
+
+// The passphrase of the backups can be remembered on this computer, encrypted like the server passwords.
+func (a *App) pgKeyPath() string { return filepath.Join(a.st.Dir(), "pgbackup.key") }
+
+// PgSavedPassphrase returns the remembered passphrase, or "".
+func (a *App) PgSavedPassphrase() string {
+	b, err := os.ReadFile(a.pgKeyPath())
+	if err != nil {
+		return ""
+	}
+	p, err := secret.Decrypt(strings.TrimSpace(string(b)))
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// PgRememberPassphrase remembers a passphrase on this computer; "" forgets it.
+func (a *App) PgRememberPassphrase(passphrase string) error {
+	if passphrase == "" {
+		if err := os.Remove(a.pgKeyPath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	enc, err := secret.Encrypt(passphrase)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.pgKeyPath(), []byte(enc), 0o600)
 }
 
 // PgChooseBackupFile asks for a backup to restore and reads its description.
@@ -308,7 +355,7 @@ func (a *App) PgChooseBackupFile() (*pgdb.FileInfo, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Restore a backup",
 		Filters: []runtime.FileFilter{
-			{DisplayName: "PostgreSQL backups (*.pgbackup.tar, *.tar, *.dump, *.backup)", Pattern: "*.pgbackup.tar;*.tar;*.dump;*.backup"},
+			{DisplayName: "PostgreSQL backups (*.pgbackup.tar, *.age, *.tar, *.dump, *.backup)", Pattern: "*.pgbackup.tar;*.age;*.tar;*.dump;*.backup"},
 			{DisplayName: "All files", Pattern: "*.*"},
 		},
 	})
@@ -333,7 +380,7 @@ func (a *App) PgChooseBackupFiles() ([]BackupFile, error) {
 	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Restore backups",
 		Filters: []runtime.FileFilter{
-			{DisplayName: "PostgreSQL backups (*.pgbackup.tar, *.tar, *.dump, *.backup)", Pattern: "*.pgbackup.tar;*.tar;*.dump;*.backup"},
+			{DisplayName: "PostgreSQL backups (*.pgbackup.tar, *.age, *.tar, *.dump, *.backup)", Pattern: "*.pgbackup.tar;*.age;*.tar;*.dump;*.backup"},
 			{DisplayName: "All files", Pattern: "*.*"},
 		},
 	})
