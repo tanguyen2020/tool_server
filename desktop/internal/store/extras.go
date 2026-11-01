@@ -1,10 +1,14 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"serverdash/internal/secret"
 )
 
 // Snippet is a saved command, for every server (ServerID empty) or one server.
@@ -116,4 +120,82 @@ func (s *Store) SetJump(id, jumpID string) error {
 		s.emit(id)
 	}
 	return err
+}
+
+// CloneProfile is a saved list of changes for "Clone containers" (find and replace, values to set), applied
+// again on the next clone. The changes often hold passwords, so the whole file is encrypted (see secret).
+type CloneProfile struct {
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Changes json.RawMessage `json:"changes"`
+}
+
+func (s *Store) cloneProfilesFile() string { return filepath.Join(s.dir, "clone-profiles.json") }
+
+func (s *Store) CloneProfiles() ([]CloneProfile, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cloneProfilesLocked()
+}
+
+func (s *Store) cloneProfilesLocked() ([]CloneProfile, error) {
+	var file struct {
+		Data string `json:"data"`
+	}
+	list := []CloneProfile{}
+	if err := readJSON(s.cloneProfilesFile(), &file); err != nil || file.Data == "" {
+		return list, err
+	}
+	plain, err := secret.Decrypt(file.Data)
+	if err != nil {
+		return list, fmt.Errorf("cannot decrypt the saved profiles: %w", err)
+	}
+	return list, json.Unmarshal([]byte(plain), &list)
+}
+
+func (s *Store) writeCloneProfilesLocked(list []CloneProfile) error {
+	b, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	enc, err := secret.Encrypt(string(b))
+	if err != nil {
+		return err
+	}
+	return writeJSON(s.cloneProfilesFile(), map[string]string{"data": enc})
+}
+
+// SaveCloneProfile adds a profile, or replaces the one with the same name.
+func (s *Store) SaveCloneProfile(in CloneProfile) (CloneProfile, error) {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		return in, errors.New("enter a name")
+	}
+	if len(in.Changes) == 0 || !json.Valid(in.Changes) {
+		return in, errors.New("no changes to save")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.cloneProfilesLocked()
+	if err != nil {
+		return in, err
+	}
+	if i := slices.IndexFunc(list, func(x CloneProfile) bool { return strings.EqualFold(x.Name, in.Name) }); i >= 0 {
+		in.ID = list[i].ID
+		list[i] = in
+	} else {
+		in.ID = newID()
+		list = append(list, in)
+	}
+	return in, s.writeCloneProfilesLocked(list)
+}
+
+func (s *Store) DeleteCloneProfile(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.cloneProfilesLocked()
+	if err != nil {
+		return err
+	}
+	return s.writeCloneProfilesLocked(slices.DeleteFunc(list, func(x CloneProfile) bool { return x.ID == id }))
 }

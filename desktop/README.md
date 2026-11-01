@@ -84,6 +84,23 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
   complete. Cancel or a failure stops the processes on both servers and removes the temporary files and that database. If the
   app is killed mid-job, the next job on the same container removes those leftovers (jobs still running, from any computer,
   are recognised by a heartbeat file and kept). Finished jobs are kept in `pgjobs.json` (last 50). End-to-end test: `PGDB_IT=1 go test ./internal/pgdb -run Integration`.
+- **Clone tab** (button *Clone* in the top bar, or *Clone to server…* on a server's Containers tab): copy containers started
+  with `docker run` from one server to another, edit them on the way, and start them there. **1 Choose** the servers and
+  containers; **2 Edit**: the settings are read with `docker inspect` (only the variables set for the container, not the
+  image's), then edited *by container* (name on the target, image, variables, published ports), *by value* (each distinct
+  value once, most used first: changing it changes it everywhere) or with *find and replace* across every container and
+  config file. **Config files** are edited too: `.env` and `.json` files mounted into the containers (`appsettings.json`,
+  shown as `ConnectionStrings:Default`-style keys and edited in place, comments and layout kept), `.env` files in mounted
+  folders, and `.env` files given to `docker run --env-file` (Docker keeps only the variables, so the file is found by
+  matching them, in the container's own folder first; editing it changes the container's variables). Renamed containers
+  keep their old name as a network alias. Every edit is a change in a list (undo one, save the list as a **profile**,
+  encrypted, to apply again next time). **3 Check** the target: name clashes (skip or replace), ports in use, missing
+  mounted paths, CPU architecture, which images and config files it already has. **Images** are pulled, or **copied from
+  the source** (`docker save | gzip | docker load` through this computer, by image ID so the target gets the build the
+  source runs: no registry login needed), or taken as they are on the target. **4 Deploy**: the script runs detached on the
+  target (`nohup`, values in private env files, never on a command line) with live progress per phase and per container,
+  then checks after 10 seconds that each one keeps running and shows the last lines of the log of one that exited or
+  restarts. Cancel, retry the failed ones, or go back and edit.
 - **Containers:** state, **health**, status with **exit code meaning**, published ports, CPU and RAM with 30-minute trend lines,
   **restart count** (with restart-loop detection: 3+ restarts in 10 minutes), net/block I/O; quick filters All / Running / Stopped /
   **Issues** (unhealthy, restart loop, restarting, abnormal exit); sortable columns; grouping by compose project; Start / Stop / Restart;

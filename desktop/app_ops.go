@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"path"
 
+	"serverdash/internal/clone"
 	"serverdash/internal/ops"
 	"serverdash/internal/sshpool"
 	"serverdash/internal/store"
@@ -214,6 +216,7 @@ type TaskInfo struct {
 //   - autoremove (apt-get autoremove, answered by the user)
 //   - journal with a service name (follows its journal)
 //   - shell with a folder (a shell opened in that folder)
+//   - dockerlogin with a registry (empty: Docker Hub), answered by the user
 func (a *App) OpenTask(serverID, kind, arg string, cols, rows int) (TaskInfo, error) {
 	srv, conn, err := a.server(serverID)
 	if err != nil {
@@ -245,6 +248,11 @@ func (a *App) OpenTask(serverID, kind, arg string, cols, rows int) (TaskInfo, er
 			return TaskInfo{}, err
 		}
 		title = fmt.Sprintf("%s:%s", srv.Name, arg)
+	case kind == "dockerlogin":
+		if script, err = clone.LoginScript(srv, arg); err != nil {
+			return TaskInfo{}, err
+		}
+		title = "docker login " + cmp.Or(arg, "Docker Hub")
 	default:
 		return TaskInfo{}, errors.New("unknown task")
 	}

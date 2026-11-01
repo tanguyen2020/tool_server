@@ -8,10 +8,12 @@ import { servicesTab } from './services.js';
 import { filesTab } from './files.js';
 import { networkTab, forwardContainer, containerTunnels, watchTunnels } from './network.js';
 import { openRunMany } from './runmany.js';
+import { cloneView, TAB_TITLE as CLONE_TITLE } from './clone.js';
+import { initCloneJobs, setBadgeListener, runningSummary as cloneRunning } from './clone-progress.js';
 import { openSnippets, snippetMenu } from './snippets.js';
 import { openActivity } from './activity.js';
 import { initUpdates } from './updates.js';
-import { createTabManager, hashFor, BACKUP } from './tabs.js';
+import { createTabManager, hashFor, BACKUP, CLONE } from './tabs.js';
 import { openServerForm } from './server-form.js';
 import { openInspect } from './inspect.js';
 import { openMenu } from './context-menu.js';
@@ -138,9 +140,10 @@ async function boot() {
     host: view,
     create: (key, root) => (key === 'overview' ? overviewView(root)
       : key === BACKUP ? backupView(root, { getServers: () => state.servers, getSnaps: () => state.snaps })
+        : key === CLONE ? cloneView(root, cloneCtx())
         : detailView(key, root)),
     describe: describeTab,
-    onActivate: (key) => setDockServer(key === BACKUP ? 'overview' : key),
+    onActivate: (key) => setDockServer(key === BACKUP || key === CLONE ? 'overview' : key),
     onClose: (key) => closeDockServer(key),
     busy: (key) => dockTerminalCount(key) > 0,
     confirmClose: async (key) => {
@@ -173,6 +176,7 @@ async function boot() {
 // ---------------------------------------------------------------- Routing: the hash selects the tab
 function keyFromHash() {
   if (location.hash === '#/backup') return BACKUP;
+  if (location.hash === '#/clone') return CLONE;
   const m =/^#\/server\/([\w-]+)/.exec(location.hash);
   return m && state.servers.has(m[1]) ? m[1] : 'overview';
 }
@@ -183,6 +187,10 @@ function describeTab(key) {
   if (key === 'overview') {
     const down = [...state.servers.keys()].filter((id) => state.snaps.get(id)?.status === 'offline').length;
     return { title: 'Overview', icon: 'home', badge: down ? `${down} offline` : '', badgeTitle: `${down} server${down > 1 ? 's' : ''} unreachable` };
+  }
+  if (key === CLONE) {
+    const r = cloneRunning();
+    return { title: 'Clone', icon: 'copy', dot: r ? 'good' : '', badge: r ? `${Math.floor(r.percent)}%` : '', badgeTone: 'info', badgeTitle: r ? `${r.count} clone${r.count > 1 ? 's' : ''} running` : '', tooltip: CLONE_TITLE };
   }
   if (key === BACKUP) {
     const r = runningSummary();
@@ -1023,6 +1031,7 @@ function detailView(id, root) {
     onRemove: (c) => removeContainer(id, c),
     onAction: (c, action, buttons) => doAction(id, c, action, buttons),
     onCompose: (project, action) => composeAction(id, project, action),
+    onClone: () => openCloneFor(id),
     onComposeOpen: async (project, mode) => {
       try {
         const info = await call('ComposeInfo', id, project);
@@ -1302,14 +1311,44 @@ document.addEventListener('visibilitychange', () => {
 
 document.getElementById('alerts-btn').addEventListener('click', openAlertSettings);
 // Top bar: an icon in front of each action.
-for (const [btnId, name] of [['run-btn', 'zap'], ['snippets-btn', 'bookmark'], ['db-btn', 'disk'], ['activity-btn', 'clock'], ['alerts-btn', 'sliders']]) document.getElementById(btnId)?.prepend(icon(name));
+for (const [btnId, name] of [['run-btn', 'zap'], ['clone-btn', 'copy'], ['snippets-btn', 'bookmark'], ['db-btn', 'disk'], ['activity-btn', 'clock'], ['alerts-btn', 'sliders']]) document.getElementById(btnId)?.prepend(icon(name));
 // Notifications: a bell, crossed out when they are off.
 notifyToggle.parentElement.append(icon('bell'), icon('bellOff'));
 notifyToggle.parentElement.lastChild.classList.add('off');
 const syncNotifyTip = () => { notifyToggle.parentElement.dataset.tip = notifyToggle.checked ? 'Desktop notifications: on' : 'Desktop notifications: off'; };
 notifyToggle.addEventListener('change', syncNotifyTip);
-const currentServer = () => { const k = keyFromHash(); return k === 'overview' || k === BACKUP ? '' : k; };
+const currentServer = () => { const k = keyFromHash(); return k === 'overview' || k === BACKUP || k === CLONE ? '' : k; };
 document.getElementById('run-btn').addEventListener('click', () => openRunMany(state.servers, state.snaps, currentServer() ? [currentServer()] : []));
+document.getElementById('clone-btn').addEventListener('click', () => openCloneFor(currentServer()));
+// Clone containers: the copy runs in a terminal on the target server's tab.
+function cloneCtx() {
+  const showServer = (serverId) => {
+    location.hash = hashFor(serverId);
+    tabs.activate(serverId);
+  };
+  return {
+    servers: state.servers, snaps: state.snaps,
+    runTask: (serverId, task) => {
+      showServer(serverId);
+      openTaskFor(serverId, task);
+    },
+    openServer: showServer,
+    // A container just created may not be in the last snapshot yet: the log only needs its name.
+    openLogs: (serverId, name) => {
+      showServer(serverId);
+      const snap = state.snaps.get(serverId);
+      if (snap) openLogs(snap, snap.docker?.containers?.find((c) => c.name === name) || { name, state: 'running' });
+    },
+  };
+}
+// Opens (or switches to) the Clone tab; preset starts a clone from that server.
+function openCloneFor(preset) {
+  location.hash = hashFor(CLONE);
+  tabs.activate(CLONE);
+  if (preset) tabs.viewOf(CLONE)?.preset(preset);
+}
+setBadgeListener(() => tabs?.renderStrip());
+initCloneJobs(document.getElementById('clone-btn'));
 document.getElementById('snippets-btn').addEventListener('click', () => openSnippets(state.servers, currentServer()));
 document.getElementById('activity-btn').addEventListener('click', () => openActivity(state.servers, currentServer()));
 initBackupButton(document.getElementById('db-btn'), () => openBackupTab(), () => tabs?.renderStrip());

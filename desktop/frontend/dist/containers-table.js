@@ -288,7 +288,9 @@ export function containersPanel(opts) {
   const el = h('section', { class: 'panel span-12' },
     h('h3', {}, 'Containers', countEl),
     h('div', { class: 'toolbar' }, search, h('div', { class: 'tabs', role: 'group', 'aria-label': 'Filter containers' }, filterBtns),
-      h('label', { class: 'check' }, groupBox, 'Group by compose project')),
+      h('label', { class: 'check' }, groupBox, 'Group by compose project'),
+      opts.onClone ? h('span', { class: 'spacer' }) : '',
+      opts.onClone ? h('button', { type: 'button', class: 'btn sm', title: 'Copy containers of this server to another server, with edited environment variables', onclick: () => opts.onClone() }, icon('copy'), 'Clone to server…') : ''),
     dockerErr,
     wrap,
   );

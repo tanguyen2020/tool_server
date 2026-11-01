@@ -373,6 +373,55 @@ func (c *Conn) Stream(cmd string) (*Stream, error) {
 	return &Stream{sess: sess, Reader: out}, nil
 }
 
+// Proc is a command with its input and output open, to pipe data between servers (docker save | docker load).
+type Proc struct {
+	sess   *ssh.Session
+	Stdin  io.WriteCloser
+	Stdout io.Reader
+	stderr *bytes.Buffer
+}
+
+// Start runs cmd with its stdin and stdout as pipes; stderr is kept for the error message.
+func (c *Conn) Start(cmd string) (*Proc, error) {
+	client, err := c.get()
+	if err != nil {
+		return nil, err
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("cannot open SSH session: %w", err)
+	}
+	p := &Proc{sess: sess, stderr: &bytes.Buffer{}}
+	sess.Stderr = p.stderr
+	if p.Stdin, err = sess.StdinPipe(); err == nil {
+		p.Stdout, err = sess.StdoutPipe()
+	}
+	if err == nil {
+		err = sess.Start(cmd)
+	}
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+	return p, nil
+}
+
+// Wait waits for the command; a failure carries what it wrote to stderr.
+func (p *Proc) Wait() error {
+	err := p.sess.Wait()
+	if err != nil {
+		if msg := strings.TrimSpace(p.stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+	}
+	return err
+}
+
+// Stderr is what the command wrote to stderr so far.
+func (p *Proc) Stderr() string { return p.stderr.String() }
+
+func (p *Proc) Close() { _ = p.sess.Close() }
+
 type Pool struct {
 	mu    sync.Mutex
 	st    *store.Store

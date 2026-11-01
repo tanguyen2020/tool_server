@@ -34,12 +34,13 @@ type App struct {
 	logsMu sync.Mutex
 	logs   map[string]func()
 
-	terms terminals
-	tun   tunnels
-	runs  runs
-	pg    pgJobs
-	act   *activity.Log
-	upd   *updater.Updater
+	terms  terminals
+	tun    tunnels
+	runs   runs
+	pg     pgJobs
+	clones cloneJobs
+	act    *activity.Log
+	upd    *updater.Updater
 
 	announced string // update version already announced (installs that cannot update themselves)
 }

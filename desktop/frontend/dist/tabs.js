@@ -1,4 +1,4 @@
-// Browser-like tabs: a fixed Overview tab, one tab per opened server and the Backup & Restore tab.
+// Browser-like tabs: a fixed Overview tab, one tab per opened server, the Backup & Restore tab and the Clone tab.
 // Each tab keeps its own view (sub-tab, filters, scroll, log panel). Hidden tabs don't render;
 // they remember which servers changed and catch up when shown.
 import { h } from './util.js';
@@ -8,8 +8,9 @@ import { icon } from './icons.js';
 const MAX_SERVER_TABS = 10;
 
 export const BACKUP = 'backup'; // the Backup & Restore tab
-export const hashFor = (key) => (key === 'overview' ? '#/' : key === BACKUP ? '#/backup' : `#/server/${key}`);
-const isServer = (key) => key !== 'overview' && key !== BACKUP;
+export const CLONE = 'clone'; // the Clone containers tab
+export const hashFor = (key) => (key === 'overview' ? '#/' : key === BACKUP ? '#/backup' : key === CLONE ? '#/clone' : `#/server/${key}`);
+const isServer = (key) => key !== 'overview' && key !== BACKUP && key !== CLONE;
 
 export function createTabManager({ strip, host, create, describe, onActivate, onClose, confirmClose = async () => true, busy = () => false }) {
   const tabs = new Map(); // key -> { key, root, view, used, pending: Set, events, scrollY }
@@ -28,6 +29,7 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
     if (tabs.has(key)) return;
     tabs.set(key, { key, root: null, view: null, used: Date.now(), pending: new Set(), events: false, scrollY: 0 });
     if (key === BACKUP) order.splice(1, 0, key); // next to Overview
+    else if (key === CLONE) order.splice(order.includes(BACKUP) ? 2 : 1, 0, key);
     else order.push(key);
     // Too many tabs: close the least recently used one (never the active tab).
     const servers = order.filter(isServer);
@@ -185,6 +187,7 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
   return {
     open, activate, close, notify, notifyEvents, serversChanged, renderStrip,
     flushActive: () => flush(tabs.get(active)),
+    viewOf: (key) => tabs.get(key)?.view || null,
     get active() { return active; },
   };
 }
