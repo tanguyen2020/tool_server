@@ -182,7 +182,7 @@ window.addEventListener('hashchange', () => tabs?.activate(keyFromHash()));
 function describeTab(key) {
   if (key === 'overview') {
     const down = [...state.servers.keys()].filter((id) => state.snaps.get(id)?.status === 'offline').length;
-    return { title: 'Overview', icon: 'home', badge: down ? String(down) : '', badgeTitle: `${down} server${down > 1 ? 's' : ''} unreachable` };
+    return { title: 'Overview', icon: 'home', badge: down ? `${down} offline` : '', badgeTitle: `${down} server${down > 1 ? 's' : ''} unreachable` };
   }
   if (key === BACKUP) {
     const r = runningSummary();
@@ -194,7 +194,7 @@ function describeTab(key) {
   return {
     title: cfg?.name || key,
     dot: snap.status === 'online' ? 'good' : snap.status === 'offline' ? 'critical' : snap.status === 'rebooting' ? 'warning' : '',
-    badge: issues ? String(issues) : '',
+    badge: issues ? `${issues} issue${issues > 1 ? 's' : ''}` : '',
     badgeTitle: `${issues} alert${issues > 1 ? 's' : ''} or container issue${issues > 1 ? 's' : ''}`,
     tooltip: [cfg?.name, snap.host?.hostname !== cfg?.name && snap.host?.hostname, `${cfg?.username}@${cfg?.host}`, snap.status || 'connecting'].filter(Boolean).join(' · '),
   };
@@ -322,11 +322,12 @@ function wireServerOpen(el, id) {
   el.addEventListener('contextmenu', (e) => openMenu(e, el, serverMenu(id)));
 }
 const serverMenu = (id) => [
-  { label: 'Open', action: () => { location.hash = hashFor(id); } },
-  { label: 'Open in new tab', action: () => tabs.open(id) },
-  { label: 'Edit', action: () => openServerForm(state.servers.get(id), groupsList(), [...state.servers.values()]) },
-  { label: 'Reboot server…', danger: true, action: () => rebootServer(id) },
-  { label: 'Remove', danger: true, action: () => removeServer(id) },
+  { label: 'Open', icon: 'arrowRight', action: () => { location.hash = hashFor(id); } },
+  { label: 'Open in new tab', icon: 'forward', action: () => tabs.open(id) },
+  { label: 'Edit connection…', icon: 'edit', action: () => openServerForm(state.servers.get(id), groupsList(), [...state.servers.values()]) },
+  { sep: true },
+  { label: 'Reboot server…', icon: 'power', danger: true, disabled: state.snaps.get(id)?.status !== 'online', action: () => rebootServer(id) },
+  { label: 'Remove from dashboard…', icon: 'trash', danger: true, action: () => removeServer(id) },
 ];
 
 function serverCard(id) {
@@ -479,17 +480,24 @@ function overviewView(root) {
   function updateStats() {
     const snaps = [...state.servers.keys()].map((id) => state.snaps.get(id));
     const count = (k) => snaps.filter(OV_FILTERS[k]).length;
-    const tile = (key, label, value, tone) => h('button', {
+    const tile = (key, label, value, tone, ic, sub) => h('button', {
       type: 'button', class: `stat stat-filter ${tone && value ? `tone-${tone}` : ''} ${prefs.filter === key ? 'active' : ''}`,
       title: prefs.filter === key ? 'Show all servers' : `Show only: ${label.toLowerCase()}`,
       onclick: () => { prefs.filter = prefs.filter === key ? 'all' : key; save(); updateStats(); build(); },
-    }, h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, String(value)));
+    }, h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, String(value)),
+      h('div', { class: 'stat-sub' }, sub), h('span', { class: 'stat-ic', 'aria-hidden': 'true' }, icon(ic)));
+    const total = state.servers.size;
+    const online = count('online');
+    const offline = count('offline');
+    const issues = count('issues');
+    const reboot = count('reboot');
+    const groups = groupsList().length;
     statsEl.replaceChildren(
-      tile('all', 'All servers', state.servers.size),
-      tile('online', 'Online', count('online'), 'good'),
-      tile('offline', 'Unreachable', count('offline'), 'critical'),
-      tile('issues', 'Need attention', count('issues'), 'warning'),
-      tile('reboot', 'Reboot required', count('reboot'), 'warning'),
+      tile('all', 'All servers', total, 'accent', 'server', groups ? `in ${groups} group${groups > 1 ? 's' : ''}` : 'monitored over SSH'),
+      tile('online', 'Online', online, 'good', 'check', total ? `${Math.round((online / total) * 100)}% of servers` : '–'),
+      tile('offline', 'Unreachable', offline, 'critical', 'wifiOff', offline ? 'SSH is not answering' : 'all reachable'),
+      tile('issues', 'Need attention', issues, 'warning', 'alert', issues ? 'alerts, containers or updates' : 'all clear'),
+      tile('reboot', 'Reboot required', reboot, 'warning', 'restart', reboot ? 'after updates' : 'none pending'),
     );
   }
 
@@ -760,18 +768,27 @@ function detailView(id, root) {
     if (range !== 'live') loadStored();
     loadEvents();
   });
-  const rebootBtn = h('button', { class: 'btn act act-remove', title: 'Restart the server (asks first)', onclick: () => rebootServer(id) }, icon('power'), 'Reboot');
+  // Rare and risky actions wait behind "more", away from the everyday buttons.
+  const moreBtn = h('button', { class: 'btn icon-btn more-btn', 'data-tip': 'More actions', 'aria-label': 'More actions', 'aria-haspopup': 'menu' }, icon('more'));
+  moreBtn.addEventListener('click', (e) => {
+    const status = (state.snaps.get(id) || {}).status;
+    openMenu(e, moreBtn, [
+      { label: 'Edit connection…', icon: 'edit', action: () => openServerForm(cfg(), groupsList(), [...state.servers.values()]) },
+      { label: 'Open in new tab', icon: 'forward', action: () => tabs.open(id) },
+      { sep: true },
+      { label: status === 'rebooting' ? 'Rebooting…' : 'Reboot server…', icon: 'power', danger: true, disabled: status !== 'online',
+        title: status === 'online' ? 'Restart the server (asks first)' : 'Only an online server can be rebooted', action: () => rebootServer(id) },
+      { label: 'Remove from dashboard…', icon: 'trash', danger: true, title: 'The server itself is not affected',
+        action: async () => { if (await removeServer(id)) location.hash = '#/'; } },
+    ], { below: true });
+  });
   const head = h('div', { class: 'detail-head' },
     title, chipSlot,
     h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', title: 'Open a shell on this server', onclick: () => openTerminalFor(id) }, icon('terminal'), 'Terminal'),
-      refreshBtn,
       resetBtn,
-      rebootBtn,
-      h('button', { class: 'btn act act-exec', title: 'Edit the connection settings', onclick: () => openServerForm(cfg(), groupsList(), [...state.servers.values()]) }, icon('edit'), 'Edit'),
-      h('button', { class: 'btn act act-remove', title: 'Remove this server from the dashboard (the server itself is not affected)', onclick: async () => {
-        if (await removeServer(id)) location.hash = '#/';
-      } }, icon('trash'), 'Remove')),
+      refreshBtn,
+      h('button', { class: 'btn primary', title: 'Open a shell on this server', onclick: () => openTerminalFor(id) }, icon('terminal'), 'Terminal'),
+      moreBtn),
     meta,
   );
 
@@ -1122,11 +1139,20 @@ function detailView(id, root) {
     title.replaceChildren(c.name, hostLabel(c, host));
     chipSlot.replaceChildren(statusChip(snap.status));
     const rebooting = snap.status === 'rebooting';
-    rebootBtn.disabled = rebooting || snap.status !== 'online';
-    setLabel(rebootBtn, 'power', rebooting ? 'Rebooting…' : 'Reboot');
     if (rebooting) chipSlot.firstChild.title = `Reboot requested at ${fmtTime(snap.rebootingSince)} — waiting for the server to come back`;
-    meta.textContent = [`${c.username}@${c.host}:${c.port}`, host?.hostname, host?.os, host && `kernel ${host.kernel}`, host?.cpuModel && `${host.cpuModel} (${host.cores} cores)`,
-      host && `up ${fmtUptime(host.uptime)}`, snap.updatedAt && `updated ${fmtTime(snap.updatedAt)}`].filter(Boolean).join(' · ');
+    // Facts about the server as small icon items; the details stay in each tooltip.
+    const facts = [
+      ['link', `${c.username}@${c.host}:${c.port}`, 'SSH connection'],
+      host?.os && ['monitor', host.os, `Operating system${host.kernel ? ` · kernel ${host.kernel}` : ''}`],
+      host?.cpuModel && ['zap', `${host.cores} cores`, host.cpuModel],
+      host && ['clock', `Up ${fmtUptime(host.uptime)}`, 'Uptime'],
+      snap.updatedAt && ['refresh', `Updated ${fmtTime(snap.updatedAt)}`, 'Last metrics received'],
+    ].filter(Boolean);
+    const sig = JSON.stringify(facts);
+    if (meta.dataset.sig !== sig) {
+      meta.dataset.sig = sig;
+      meta.replaceChildren(...facts.map(([ic, text, tip]) => h('span', { class: 'meta-item', title: tip }, icon(ic), text)));
+    }
     if (refreshing && snap.updatedAt > refreshing.since) {
       if (snap.status === 'online' || snap.status === 'rebooting') finishRefresh(true);
       else finishRefresh(false, `Refresh failed: ${snap.error || 'server unreachable'}`);

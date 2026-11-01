@@ -35,6 +35,7 @@
   <dialog id="server-dialog" class="dialog">
     <form method="dialog" id="server-form" class="form">
       <h2 id="server-dialog-title">Add server</h2>
+      <div class="form-section">Server</div>
       <div class="grid-2">
         <label>Display name<input name="name" placeholder="e.g. prod-api-01"></label>
         <label>Group<input name="group" placeholder="e.g. production" list="group-list"></label>
@@ -45,6 +46,7 @@
         <label>Port<input name="port" type="number" value="22" min="1" max="65535"></label>
         <label>User<input name="username" required placeholder="deploy"></label>
       </div>
+      <div class="form-section">Sign-in</div>
       <label>Authentication
         <select name="authType">
           <option value="key">Private key (paste content)</option>
@@ -60,6 +62,7 @@
       <label data-auth="key keyPath">Passphrase (if any)<input name="passphrase" type="password" autocomplete="new-password"></label>
       <label data-auth="password">SSH password<input name="password" type="password" autocomplete="new-password"></label>
       <p class="hint" id="secret-hint" hidden>Leave secret fields empty to keep the saved values.</p>
+      <div class="form-section">Options</div>
       <label class="check"><input type="checkbox" name="useSudo"> Run docker with <code>sudo -n</code> (when the user is not in the docker group)</label>
       <label>Connect through (jump host / bastion)
         <select name="jumpId"><option value="">Direct connection</option></select>
@@ -122,7 +125,7 @@
     <div class="logs-resize" id="logs-resize" title="Drag to resize" aria-hidden="true"></div>
     <div class="dock-bar">
       <div class="dock-tabs" id="dock-tabs" role="tablist" aria-label="Logs and terminals"></div>
-      <button type="button" class="btn ghost sm" id="dock-new-term" title="Open a shell on this server">+ Terminal</button>
+      <button type="button" class="btn ghost sm" id="dock-new-term" title="Open a shell on this server">Terminal</button>
       <span class="spacer"></span>
       <div class="term-tools" id="term-tools" hidden>
         <button type="button" class="btn ghost sm" id="term-snippets" title="Type a saved command into this terminal">Snippets</button>
@@ -130,8 +133,8 @@
         <button type="button" class="btn ghost sm" id="term-font-down" title="Smaller text (Ctrl+-)" aria-label="Smaller text">A−</button>
         <button type="button" class="btn ghost sm" id="term-font-up" title="Larger text (Ctrl+=)" aria-label="Larger text">A+</button>
       </div>
-      <button type="button" class="btn ghost icon" id="logs-max" aria-label="Maximize panel" title="Maximize">⤢</button>
-      <button type="button" class="btn ghost icon" id="dock-collapse" aria-label="Collapse panel" title="Collapse (sessions keep running)">▾</button>
+      <button type="button" class="btn ghost icon" id="logs-max" aria-label="Maximize panel" title="Maximize"></button>
+      <button type="button" class="btn ghost icon" id="dock-collapse" aria-label="Collapse panel" title="Collapse (sessions keep running)"></button>
     </div>
     <div class="dock-pane" id="logs-pane">
     <div class="logs-head">
@@ -162,7 +165,7 @@
       <canvas id="logs-volume" role="img" aria-label="Log volume over time by level"></canvas>
       <div class="tooltip" id="logs-volume-tip" hidden></div>
     </div>
-    <div class="logs-body wrap" id="logs-body" role="log" aria-live="off"></div>
+    <div class="logs-body wrap" id="logs-body" role="log" aria-live="off" data-empty="Waiting for log lines…"></div>
     <button type="button" class="btn primary jump" id="logs-jump" hidden>↓ Jump to latest</button>
     </div>
     <div class="dock-pane" id="term-pane" hidden>

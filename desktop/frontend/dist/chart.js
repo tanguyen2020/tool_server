@@ -53,24 +53,34 @@ export function tickCount(max, bytes = false) {
   return 4;
 }
 
-// Left padding that fits the widest Y label.
-export function leftPad(ctx, max, format, bytes = false) {
-  ctx.font = FONT;
+// Y tick values: 0..max in tickCount steps, or min..max by step for an axis that does not start at zero.
+function yTicks(max, bytes, min, step) {
+  if (step) {
+    const out = [];
+    for (let v = min; v <= max + step / 2; v += step) out.push(v);
+    return out;
+  }
   const n = tickCount(max, bytes);
+  return Array.from({ length: n + 1 }, (_, i) => (max * i) / n);
+}
+
+// Left padding that fits the widest Y label.
+export function leftPad(ctx, max, format, bytes = false, min = 0, step = 0) {
+  ctx.font = FONT;
   let w = 0;
-  for (let i = 0; i <= n; i++) w = Math.max(w, ctx.measureText(format((max * i) / n)).width);
+  for (const v of yTicks(max, bytes, min, step)) w = Math.max(w, ctx.measureText(format(v)).width);
   return Math.max(34, Math.ceil(w) + 14);
 }
 
 // Horizontal grid lines with Y labels at round values: a solid baseline, light dashed lines above it.
-export function drawYGrid(ctx, { pad, width, y, max, format, bytes = false }) {
+export function drawYGrid(ctx, { pad, width, y, max, min = 0, step = 0, format, bytes = false }) {
   ctx.font = FONT;
   ctx.lineWidth = 1;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
-  const n = tickCount(max, bytes);
-  for (let i = 0; i <= n; i++) {
-    const v = (max * i) / n;
+  const ticks = yTicks(max, bytes, min, step);
+  for (let i = 0; i < ticks.length; i++) {
+    const v = ticks[i];
     const yy = Math.round(y(v)) + 0.5;
     ctx.save();
     ctx.strokeStyle = i === 0 ? cssVar('--axis') : cssVar('--grid');

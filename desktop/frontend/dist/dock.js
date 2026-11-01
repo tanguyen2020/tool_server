@@ -1,6 +1,7 @@
 // The bottom panel of a server tab, like VS Code's panel: one Logs session plus any number of terminals,
 // each in its own dock tab. Sessions keep running when the panel is collapsed or another server tab is shown.
 import { h } from './util.js';
+import { icon, setLabel } from './icons.js';
 import { openMenu } from './context-menu.js';
 import { setLogsTab, closeTabLogs, hasLogs, logsTitle, showLogsPane, hideLogsPane } from './logs.js';
 import {
@@ -92,7 +93,14 @@ function closeItem(item) {
 
 function expand() {
   panel.classList.remove('collapsed');
-  $('dock-collapse').textContent = '▾';
+  setLabel($('dock-collapse'), 'chevronDown', '');
+  setLabel($('logs-max'), 'maximize', '');
+  setLabel($('dock-new-term'), 'plus', 'Terminal');
+  $('logs-pause').prepend(icon('pause'));
+  setLabel($('logs-clear'), 'broom', 'Clear');
+  setLabel($('logs-download'), 'download', 'Save');
+  setLabel($('term-snippets'), 'bookmark', 'Snippets');
+  setLabel($('term-search-btn'), 'search', 'Search');
   $('dock-collapse').title = 'Collapse (sessions keep running)';
 }
 
@@ -228,12 +236,12 @@ export function initDock({ snapshot }) {
   $('logs-max').addEventListener('click', () => {
     expand();
     const max = panel.classList.toggle('max');
-    $('logs-max').textContent = max ? '⤡' : '⤢';
+    setLabel($('logs-max'), max ? 'minimize' : 'maximize', '');
     $('logs-max').title = max ? 'Restore' : 'Maximize';
   });
   $('dock-collapse').addEventListener('click', () => {
     const collapsed = panel.classList.toggle('collapsed');
-    $('dock-collapse').textContent = collapsed ? '▴' : '▾';
+    setLabel($('dock-collapse'), collapsed ? 'chevronUp' : 'chevronDown', '');
     $('dock-collapse').title = collapsed ? 'Expand' : 'Collapse (sessions keep running)';
     if (!collapsed) render();
   });

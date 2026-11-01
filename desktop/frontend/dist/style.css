@@ -1667,3 +1667,65 @@ dialog.bk-drawer.closing { animation: bk-slide-out 0.16s ease-in forwards; }
 .series-legend i.key { width: 10px; height: 10px; border-radius: 3px; vertical-align: middle; }
 .series-legend td { padding: 6px 8px; }
 .series-legend tr:hover td { background: var(--hover); }
+
+/* Change column of the container memory charts: growth stands out, steady stays quiet */
+.series-legend td.trend { font-variant-numeric: tabular-nums; font-weight: 600; }
+.series-legend td.trend.up { color: var(--critical-ink); }
+.series-legend td.trend.down { color: var(--good); }
+.series-legend td.trend.flat { color: var(--muted); font-weight: 400; }
+/* Series legend, Grafana style: hidden series grayed out, the picked ones in bold, a "Show all" bar */
+.series-legend tr.off td { opacity: 0.4; }
+.series-legend tr.off i.key { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.series-note { display: flex; align-items: center; gap: 10px; padding: 6px 8px; margin-bottom: 4px; border-radius: 6px; background: var(--surface-2); font-size: 12px; color: var(--ink-2); }
+.series-note button.link { margin-left: auto; padding: 0; border: 0; background: none; color: var(--accent-ink); font: inherit; font-weight: 600; cursor: pointer; }
+.series-note button.link:hover { text-decoration: underline; }
+/* Memory panels carry Diff and Mean too: a wider legend, tighter cells */
+.series-panel.wide { grid-template-columns: minmax(0, 1fr) minmax(470px, 40%); }
+.series-panel.wide .series-legend td, .series-panel.wide .series-legend th { padding-left: 6px; padding-right: 6px; }
+@media (max-width: 1100px) { .series-panel.wide { grid-template-columns: 1fr; } }
+
+/* Server page: "more actions" menu, facts as icon items, collapsed empty panels */
+.detail-head .more-btn { width: 34px; padding: 0; justify-content: center; }
+.ctx-menu button { display: flex; align-items: center; gap: 9px; }
+.ctx-menu button .i, .detail-head .meta-item .i { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ctx-menu button .i { width: 15px; height: 15px; opacity: 0.8; }
+.ctx-menu button:disabled { opacity: 0.45; cursor: default; background: none; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.detail-head .meta { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.detail-head .meta-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.detail-head .meta-item .i { width: 13px; height: 13px; opacity: 0.7; }
+.panel.collapsed > h3 { margin-bottom: 0; }
+.panel.collapsed > div { display: none; }
+/* Tab badges carry a word ("1 offline"): a soft tinted pill reads better than a solid red one */
+.tab-badge { height: 19px; padding: 0 7px; font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical-ink); }
+
+/* Overview tiles: an icon chip and a short line under the number */
+.stat-filter { position: relative; padding-right: 60px; }
+.stat-filter .stat-sub { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-filter .stat-ic { position: absolute; top: 14px; right: 14px; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--muted); }
+.stat-filter .stat-ic .i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.stat-filter.tone-accent .stat-ic { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-ink); }
+.stat-filter.tone-good .stat-ic { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good); }
+.stat-filter.tone-critical .stat-ic { background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical-ink); }
+.stat-filter.tone-warning .stat-ic { background: color-mix(in srgb, var(--warning) 18%, transparent); color: color-mix(in srgb, var(--warning) 70%, var(--ink)); }
+
+/* Dialogs: section titles, a footer line, outlined secondary buttons, one select style */
+.dialog .form-section { margin: 6px 0 -2px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.dialog h2 + .form-section { border-top: 0; padding-top: 0; }
+.dialog .form-actions { margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+.dialog .form-actions .btn.ghost, .dialog .input-row .btn.ghost { border: 1px solid var(--border-strong); background: var(--surface); }
+.dialog .form-actions .btn.ghost:hover, .dialog .input-row .btn.ghost:hover { background: var(--hover); }
+select:not([multiple]):not([size]) { appearance: none; -webkit-appearance: none; padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8984' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 15px; }
+
+/* Dock: outlined tool buttons with icons, and a quiet line while no log line has arrived */
+.dock .btn.ghost { border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); }
+.dock .btn.ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.dock .btn.ghost.icon { width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center; }
+.dock .dock-tabs .btn.ghost, .dock .dock-tab .btn { border: 0; }
+.dock .btn .i { width: 14px; height: 14px; }
+.logs-body:empty::before { content: attr(data-empty); display: block; padding: 28px 16px; text-align: center; color: var(--muted); font-family: var(--font); font-size: 12.5px; }
+.dialog .form-msg:empty { display: none; }

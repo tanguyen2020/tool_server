@@ -99,18 +99,20 @@ export function containerMetricsTab({ projectOf }) {
   // Only containers started with a limit (--memory / --cpus) have these two.
   const limP = panel('Container memory vs limit');
   const thrP = panel('Container CPU throttling');
+  limP.right.title = 'Containers started with a memory limit (--memory, or mem_limit in compose)';
+  thrP.right.title = 'Containers started with a CPU limit (--cpus, or cpus in compose)';
   const lim = new SeriesPanel(limP.body, {
-    format: fmtShare, minMax: 10, maxCap: 100, label: 'Memory use as % of each container limit',
-    emptyText: 'No container has a memory limit — this chart shows containers started with --memory (mem_limit in compose)',
+    format: fmtShare, minMax: 10, maxCap: 100, trend: true, label: 'Memory use as % of each container limit',
+    emptyText: 'No container has a memory limit',
   });
   const thr = new SeriesPanel(thrP.body, {
     format: fmtShare, minMax: 5, maxCap: 100, label: 'Share of CPU periods in which each container was throttled',
-    emptyText: 'No container has a CPU limit — this chart shows containers started with --cpus (cpus in compose)',
+    emptyText: 'No container has a CPU limit',
   });
-  const mem = new SeriesPanel(memP.body, { format: fmtMem, bytes: true, label: 'Memory usage per container over time' });
+  const mem = new SeriesPanel(memP.body, { format: fmtMem, bytes: true, trend: true, label: 'Memory usage per container over time' });
   const net = new SeriesPanel(netP.body, { format: fmtRateShort, bytes: true, label: 'Network throughput per container over time' });
   const io = new SeriesPanel(ioP.body, { format: fmtRateShort, bytes: true, label: 'Disk throughput per container over time' });
-  const netNote = h('span');
+  const netNote = h('span', { title: 'Containers on the host network are not counted: their traffic is the server’s own' });
   const ioNote = h('span');
   netP.right.append(netNote, segmented('Network direction', [['total', 'Total'], ['a', 'Received'], ['b', 'Sent']], prefs.net, (v) => { prefs.net = v; save(); render(); }));
   ioP.right.append(ioNote, segmented('Disk direction', [['total', 'Total'], ['a', 'Read'], ['b', 'Write']], prefs.io, (v) => { prefs.io = v; save(); render(); }));
@@ -150,14 +152,18 @@ export function containerMetricsTab({ projectOf }) {
     net.setData(src.t, grouped(combine(src.netRx, src.netTx, prefs.net)));
     io.setData(src.t, grouped(combine(src.blkRead, src.blkWrite, prefs.io)));
     const what = prefs.group ? 'series' : 'containers';
-    cpuP.right.textContent = `${cpu.stats.length} ${what} · % of server CPU · top 8 colored`;
+    cpuP.right.textContent = `${cpu.stats.length} ${what} · share of the server CPU`;
     // Percentages of each container's own limit do not add up: these stay per container.
     lim.setData(src.t, src.memLimit || new Map());
     thr.setData(src.t, src.throttled || new Map());
-    limP.right.textContent = `${lim.stats.length} limited container${lim.stats.length === 1 ? '' : 's'} · 100% = out of memory (OOM kill)`;
-    thrP.right.textContent = `${thr.stats.length} limited container${thr.stats.length === 1 ? '' : 's'} · % of time slices held back by --cpus`;
-    memP.right.textContent = `${mem.stats.length} ${what} · top 8 colored`;
-    netNote.textContent = `${net.stats.length} ${what} · host-network containers excluded`;
+    // Without any limited container these two shrink to their title line.
+    const limited = (n, kind, more) => (n ? `${n} container${n === 1 ? '' : 's'} with a ${kind} limit · ${more}` : `No container has a ${kind} limit`);
+    limP.right.textContent = limited(lim.stats.length, 'memory', '100% = out of memory');
+    thrP.right.textContent = limited(thr.stats.length, 'CPU', 'time held back by the limit');
+    limP.el.classList.toggle('collapsed', !lim.stats.length && src.t.length >= 2);
+    thrP.el.classList.toggle('collapsed', !thr.stats.length && src.t.length >= 2);
+    memP.right.textContent = `${mem.stats.length} ${what}`;
+    netNote.textContent = `${net.stats.length} ${what}`;
     ioNote.textContent = `${io.stats.length} ${what}`;
   }
   function applyMarkers() {

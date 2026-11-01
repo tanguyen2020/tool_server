@@ -3,6 +3,7 @@
 // Every server tab has its own log session; streams keep running while their tab is hidden.
 // The dock (dock.js) owns the panel; this module renders into the Logs pane while it is shown.
 import { h, toast, fmtTime } from './util.js';
+import { setLabel } from './icons.js';
 import { call, on, copyText } from './bridge.js';
 import { cssVar, setupCanvas, niceMax } from './chart.js';
 
@@ -432,7 +433,7 @@ function syncUI() {
   jsonBox.checked = S.json;
   body.classList.toggle('hide-ts', !S.ts);
   body.classList.toggle('wrap', S.wrap);
-  pauseBtn.textContent = S.paused ? `Resume${S.queued.length ? ` (${S.queued.length})` : ''}` : 'Pause';
+  setLabel(pauseBtn, S.paused ? 'play' : 'pause', S.paused ? `Resume${S.queued.length ? ` (${S.queued.length})` : ''}` : 'Pause');
 }
 
 // Opens the logs of a container in the tab of its server (replacing that tab's previous log session).
@@ -515,7 +516,7 @@ export function initLogs() {
     }
     syncUI();
   });
-  setInterval(() => { if (S?.paused) pauseBtn.textContent = `Resume (${S.queued.length})`; }, 500);
+  setInterval(() => { if (S?.paused) setLabel(pauseBtn, 'play', `Resume (${S.queued.length})`); }, 500);
   jumpBtn.addEventListener('click', () => { body.scrollTop = body.scrollHeight; jumpBtn.hidden = true; });
   body.addEventListener('scroll', () => { if (atBottom()) jumpBtn.hidden = true; });
   $('logs-download').addEventListener('click', async () => {
