@@ -2,7 +2,7 @@
 // The work runs in the database containers (pg_dump / pg_restore in parallel); this page only follows it.
 // Header with the figures of the day; left: the new-job form in numbered steps; right: live jobs, then the history.
 import { h, toast, fmtBytes } from './util.js';
-import { call, on, confirmDialog } from './bridge.js';
+import { call, on, confirmDialog, copyText } from './bridge.js';
 import { modal, fmtDateTime } from './ui.js';
 import { icon } from './icons.js';
 import { combo } from './combo.js';
@@ -48,6 +48,12 @@ const STEP = { prepare: 'Prepare', dump: 'Back up', transfer: 'Transfer', restor
 const DOING = { prepare: 'Preparing', dump: 'Backing up', transfer: 'Transferring', restore: 'Restoring data', indexes: 'Building indexes', finish: 'Finishing' };
 const versionText = (v) => (v >= 100000 ? `${Math.floor(v / 10000)}.${v % 10000}` : v > 0 ? `${Math.floor(v / 10000)}.${Math.floor(v / 100) % 100}` : '?');
 const baseName = (p) => (p || '').split(/[\\/]/).pop();
+// A container's name, or "Installed · port 5432" for PostgreSQL installed on the server ("native:5432").
+function instLabel(id) {
+  const m = /^native:(\d+)$/.exec(id || '');
+  if (m) return `Installed · port ${m[1]}`;
+  return { native: 'Installed PostgreSQL', docker: 'Docker containers' }[id] || id;
+}
 const MIN_PASS = 8; // pgdb.MinPassLen
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const pill = (tone, text) => h('span', { class: `bk-pill ${tone}` }, text);
@@ -152,17 +158,18 @@ export function backupView(root, { getServers, getSnaps }) {
   const clearBtn = h('button', { type: 'button', class: 'btn ghost sm' }, icon('trash'), 'Clear history');
   const liveCount = h('span', { class: 'bk-count' });
   const historyCount = h('span', { class: 'bk-count' });
+  const newPanel = h('section', { class: 'bk-panel bk-new' },
+    h('div', { class: 'bk-panel-head' }, h('h3', {}, 'New job'), h('span', { class: 'bk-panel-sub' }, 'Copy, back up or restore')),
+    formHost);
   root.append(h('div', { class: 'bk-page' },
     h('header', { class: 'bk-hero' },
       h('span', { class: 'bk-hero-icon' }, icon('disk')),
       h('div', { class: 'bk-hero-text' },
         h('h2', {}, TAB_TITLE),
-        h('p', {}, 'Copy, back up and restore PostgreSQL databases running in Docker, with live progress.'))),
+        h('p', {}, 'Copy, back up and restore PostgreSQL databases, in Docker or installed on the servers, with live progress.'))),
     h('div', { class: 'bk-stats' }, stRunning.el, stQueued.el, stDone.el, stData.el),
     h('div', { class: 'bk-layout' },
-      h('section', { class: 'bk-panel bk-new' },
-        h('div', { class: 'bk-panel-head' }, h('h3', {}, 'New job'), h('span', { class: 'bk-panel-sub' }, 'Copy, back up or restore')),
-        formHost),
+      newPanel,
       h('div', { class: 'bk-activity' },
         h('section', { class: 'bk-section' },
           h('div', { class: 'bk-section-head' }, h('h3', {}, 'In progress'), liveCount),
@@ -273,10 +280,32 @@ export function backupView(root, { getServers, getSnaps }) {
   layout();
   const tick = setInterval(stats, 60000); // "today" moves on
 
+  // The New job panel sticks under the header once the page scrolls; its height is what is left of the window
+  // below where it is now, so its footer (summary, Check, Start) is always in view, before it sticks too.
+  let fitFrame = 0;
+  const fitPanel = () => {
+    cancelAnimationFrame(fitFrame);
+    fitFrame = requestAnimationFrame(() => {
+      if (getComputedStyle(newPanel).position !== 'sticky') { newPanel.style.maxHeight = ''; return; }
+      const top = newPanel.getBoundingClientRect().top;
+      if (!newPanel.offsetParent) return; // the tab is hidden
+      newPanel.style.maxHeight = `${Math.max(360, window.innerHeight - Math.max(top, 0) - 16)}px`;
+    });
+  };
+  window.addEventListener('scroll', fitPanel, { passive: true });
+  window.addEventListener('resize', fitPanel);
+  const shown = new ResizeObserver(fitPanel); // the tab shown again, the header above it resized
+  shown.observe(root);
+  fitPanel();
+
   return {
     update() {}, // server snapshots do not concern this page
     destroy() {
       clearInterval(tick);
+      cancelAnimationFrame(fitFrame);
+      window.removeEventListener('scroll', fitPanel);
+      window.removeEventListener('resize', fitPanel);
+      shown.disconnect();
       listeners.delete(onJob);
       current = null;
     },
@@ -625,6 +654,10 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
 
   // One page: numbered sections, then Check / Start at the bottom.
   const checksEl = h('div', { class: 'bk-checks' });
+  // The results of Check sit at the end of the form: bring them (the first error first) into view.
+  const showChecks = () => requestAnimationFrame(() => {
+    (checksEl.querySelector('.bk-check.error') || checksEl).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
   const summaryEl = h('div', { class: 'bk-summary' });
   const startBtn = h('button', { type: 'button', class: 'btn primary bk-go' }, icon('play'), 'Start');
   const checkBtn = h('button', { type: 'button', class: 'btn bk-check-btn' }, icon('check'), 'Check');
@@ -785,12 +818,13 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
   async function preflight() {
     const list = collect();
     const miss = missing(list);
-    if (miss) { checksEl.replaceChildren(checkRow('error', miss)); return null; }
+    if (miss) { checksEl.replaceChildren(checkRow('error', miss)); showChecks(); return null; }
     if (wantsFile()) {
       for (const s of list) s.file = multiFile() ? await call('PgBackupFileIn', file, source.serverName(), s.source.database, encrypt.input.checked) : file;
     }
     const busy = h('div', { class: 'bk-check busy' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('div', {}, list.length > 1 ? `Checking ${list.length} databases…` : 'Checking the servers…'));
     checksEl.replaceChildren(busy);
+    showChecks();
     let done = 0;
     const results = await pool(list, 3, async (s) => {
       let pf;
@@ -813,6 +847,7 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
     const allOk = results.every((r) => r.pf.ok);
     if (allOk) rows.unshift(checkRow('ok', list.length > 1 ? `All ${list.length} databases are ready` : 'Everything is ready'));
     checksEl.replaceChildren(...rows);
+    showChecks();
     return results;
   }
 
@@ -857,7 +892,9 @@ function newJobForm({ servers, snaps, loadInstances, preset, onStarted }) {
 }
 
 const fact = (k, v) => h('div', { class: 'bk-fact' }, h('span', { class: 'bk-fact-k' }, k), h('span', { class: 'bk-fact-v' }, v));
-const checkRow = (level, text, title = '') => h('div', { class: `bk-check ${level}` }, icon(level === 'ok' ? 'check' : 'alert'), h('div', {}, title ? h('strong', {}, title) : '', title ? ' ' : '', text));
+// Failed statements of a job that still need attention (one creating what already exists does not).
+const unfixed = (v) => (v.failed || []).filter((f) => f.status !== 'fixed' && !/already exists/.test(f.error));
+const checkRow = (level, text, title = '') => h('div', { class: `bk-check ${level}` }, icon(level === 'ok' ? 'check' : level === 'info' ? 'info' : 'alert'), h('div', {}, title ? h('strong', {}, title) : '', title ? ' ' : '', text));
 
 // An eye button that shows or hides the passphrase fields.
 function showPassButton(inputs) {
@@ -935,9 +972,9 @@ function reviewPanel(items, names) {
     h('span', { class: 'bk-end-main' }, h('span', { class: 'bk-end-icon' }, icon(iconName)), h('span', { class: 'bk-end-text' }, h('span', { class: 'bk-end-name' }, name), h('span', { class: 'bk-end-sub' }, sub))));
   const pgText = (inst) => (inst?.version ? `PostgreSQL ${versionText(inst.version)}` : '');
   const from = s.kind === 'restore' ? end('From', 'file', multi ? `${n} backup files` : baseName(s.file), 'on this computer')
-    : end('From', 'disk', names.source, [s.source.container, pgText(pf.source)].filter(Boolean).join(' · '));
+    : end('From', 'disk', names.source, [instLabel(s.source.container), pgText(pf.source)].filter(Boolean).join(' · '));
   const to = s.kind === 'backup' ? end('To', 'monitor', 'This computer', names.folder ? 'one file per database' : baseName(s.file))
-    : end('To', 'disk', names.target, [s.target.container, pgText(pf.target)].filter(Boolean).join(' · '));
+    : end('To', 'disk', names.target, [instLabel(s.target.container), pgText(pf.target)].filter(Boolean).join(' · '));
   const via = s.kind === 'copy' ? (s.direct ? 'Direct' : 'Via this computer') : s.kind === 'backup' ? 'Download' : 'Upload';
   const dbs = items.slice(0, 24).map((r) => h('span', { class: 'bk-chip' },
     s.kind === 'copy' && r.s.source.database !== r.s.target.database ? `${r.s.source.database} → ${r.s.target.database}`
@@ -1054,10 +1091,11 @@ function endpointPicker({ role, servers, snaps, loadInstances, preset }) {
     if (err) { meta.replaceChildren(h('span', { class: 'bk-meta-err' }, icon('alert'), err)); return; }
     if (!inst) { meta.replaceChildren(); return; }
     meta.replaceChildren(
+      inst.native ? h('span', { class: 'bk-tag', title: `Installed on the server, not in a container${inst.dataDir ? ` · data in ${inst.dataDir}` : ''}` }, 'Installed') : '',
       h('span', { class: 'bk-tag' }, `PostgreSQL ${versionText(inst.version)}`),
       h('span', { class: 'bk-tag' }, `${inst.cores} CPU`),
       h('span', { class: 'bk-tag', title: 'Free space for temporary backup files' }, `${fmtBytes(inst.tmpFreeKb * 1024)} free`),
-      h('span', { class: 'bk-tag subtle', title: 'PostgreSQL login read from the container' }, `login ${inst.user}`));
+      h('span', { class: 'bk-tag subtle', title: inst.native ? 'Runs as the postgres user of the server, logged in through its socket (peer authentication)' : 'PostgreSQL login read from the container' }, `login ${inst.user}`));
   }
 
   function fillDatabases() {
@@ -1107,10 +1145,14 @@ function endpointPicker({ role, servers, snaps, loadInstances, preset }) {
       list = got || [];
       if (!list.length) {
         contSel.setOptions([], 'No PostgreSQL found');
-        setMeta(null, 'No PostgreSQL container is running on this server');
+        setMeta(null, 'No PostgreSQL on this server: no running container with a PostgreSQL image, and none installed on it');
         return;
       }
-      contSel.setOptions(list.map((i) => ({ value: i.container, label: i.container, sub: i.version ? `PostgreSQL ${versionText(i.version)}` : 'cannot log in' })), 'Choose PostgreSQL…');
+      contSel.setOptions(list.map((i) => ({
+        value: i.container,
+        label: instLabel(i.container),
+        sub: i.error ? 'cannot be used' : [i.native ? 'installed on the server' : '', i.version ? `PostgreSQL ${versionText(i.version)}` : 'cannot log in'].filter(Boolean).join(' · '),
+      })), 'Choose PostgreSQL…');
       contSel.disabled = false;
       const want = preset?.container;
       contSel.value = want && contSel.has(want) ? want : list.length === 1 ? list[0].container : contSel.value;
@@ -1280,10 +1322,12 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
   const phasesEl = h('div', { class: 'jc-phases' });
   const tablesEl = h('div', { class: 'jc-tables' });
   const warnEl = h('div', { class: 'jc-warnings' });
+  const failedEl = h('section', { class: 'jc-failed', hidden: true });
+  const openTech = new Set(); // failed statements whose error and SQL are shown
   const summaryEl = h('div', { class: 'jc-summary' });
   const logPre = h('pre', { class: 'jc-log' });
   const log = h('details', { class: 'bk-disclosure jc-log-box' }, h('summary', {}, icon('logs'), 'Technical log'), logPre);
-  const body = h('div', { class: 'jc-body' }, phasesEl, tablesEl, warnEl, summaryEl, log);
+  const body = h('div', { class: 'jc-body' }, phasesEl, tablesEl, warnEl, failedEl, summaryEl, log);
   const el = h('article', { class: 'jc' },
     h('div', { class: 'jc-head' }, kindIcon, h('div', { class: 'jc-title' }, name, route), facts, statusEl, actions, more),
     live, body);
@@ -1301,7 +1345,7 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
   };
   more.addEventListener('click', () => setExpanded(!expanded));
   el.addEventListener('click', (e) => { // a click on a finished row opens it too
-    if (!el.classList.contains('done-row') || e.target.closest('button, a, input, details, pre')) return;
+    if (!el.classList.contains('done-row') || e.target.closest('button, a, input, details, pre, .jc-body')) return;
     setExpanded(!expanded);
   });
 
@@ -1327,7 +1371,9 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
     facts.hidden = isLive;
     if (!isLive) {
       const sm = v.summary || {};
+      const left = unfixed(v).length;
       facts.replaceChildren(
+        left ? h('span', { class: 'jc-fact-bad', title: 'Statements the restore could not run: open the details to fix them' }, icon('alert'), plural(left, 'statement'), ' failed') : '',
         h('span', { title: 'Size' }, sm.backupBytes ? fmtBytes(sm.backupBytes) : sm.databaseBytes ? fmtBytes(sm.databaseBytes) : '–'),
         h('span', { title: 'Duration' }, fmtDuration((v.ended - v.started) / 1000)),
         h('span', { title: fmtDateTime(v.ended || v.started) }, fmtWhen(v.ended || v.started)));
@@ -1372,8 +1418,10 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
     }
     warnEl.hidden = !v.warnings.length && !(v.state === 'failed' || v.state === 'cancelled');
     warnEl.replaceChildren(
-      v.state === 'failed' || v.state === 'cancelled' ? h('div', { class: `bk-check ${v.state === 'failed' ? 'error' : 'muted'}` }, icon('alert'), h('div', {}, v.error)) : '',
+      v.state === 'failed' || v.state === 'cancelled' ? h('div', { class: `bk-check ${v.state === 'failed' ? 'error' : 'muted'}` }, icon('alert'),
+        h('div', {}, v.error, v.errorFix ? h('div', { class: 'jc-fix' }, h('strong', {}, 'How to fix: '), v.errorFix) : '')) : '',
       ...v.warnings.slice(0, 30).map((w) => h('div', { class: 'bk-check warn' }, icon('alert'), h('div', {}, w))));
+    renderFailed(v);
     renderSummary(v);
     if (v.state === 'failed') log.open = true;
     if (v.log.length !== logLen || !isRunning) {
@@ -1430,6 +1478,66 @@ function jobCard(v0, { expanded = false, onAgain, onForget }) {
       btns.push(h('button', { type: 'button', class: 'btn ghost icon sm', title: 'Remove from the history', 'aria-label': 'Remove from the history', onclick: () => onForget(v) }, icon('trash')));
     }
     actions.replaceChildren(...btns);
+  }
+
+  // The statements the restore could not run: what each means, how to fix it, and Retry once it is fixed.
+  function renderFailed(v) {
+    const list = v.failed || [];
+    failedEl.hidden = !list.length || v.state === 'running' || v.state === 'queued';
+    if (failedEl.hidden) return;
+    const left = unfixed(v);
+    const retryable = list.filter((f) => f.retry && f.status !== 'fixed');
+    const fixed = list.filter((f) => f.status === 'fixed').length;
+    const db = v.summary?.finalDatabase;
+    const where = `${db || v.spec.target.database} on ${v.spec.target.server}`;
+    let action = '';
+    if (v.retrying) {
+      action = h('div', { class: 'jc-failed-act' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), h('span', {}, 'Running again…'),
+        h('button', { type: 'button', class: 'btn ghost sm', onclick: (e) => { e.currentTarget.disabled = true; call('PgCancel', v.id); } }, icon('stop'), 'Stop'));
+    } else if (retryable.length && db) {
+      action = h('button', {
+        type: 'button', class: 'btn primary sm', title: `Run ${retryable.length === 1 ? 'it' : 'them'} again in ${where}, in order`,
+        onclick: async (e) => {
+          const b = e.currentTarget;
+          b.disabled = true;
+          try { await call('PgRetryFailed', v.id); } catch (err) { toast(err.message, true); b.disabled = false; }
+        },
+      }, icon('restart'), retryable.length === 1 ? 'Retry' : `Retry ${retryable.length}`);
+    }
+    const title = left.length
+      ? `${plural(list.length, 'statement')} failed during the restore${fixed ? ` · ${fixed} fixed since` : ''}`
+      : fixed ? `${fixed === list.length ? 'All failed statements' : `${fixed} of ${list.length} failed statements`} fixed` : 'Statements left out during the restore';
+    const help = left.length
+      ? `The rest of ${where} was restored. Fix the cause shown below, then Retry runs ${retryable.length === 1 ? 'the statement' : 'them'} again in this database.`
+      : `${where} is complete.`;
+
+    const items = list.map((f, i) => {
+      const st = f.status === 'fixed' ? 'fixed' : f.status === 'failed' ? 'again' : 'open';
+      const harmless = /already exists/.test(f.error);
+      const tech = h('details', { class: 'jc-fail-tech', open: openTech.has(i) },
+        h('summary', {}, 'Error and statement'),
+        h('pre', { class: 'jc-fail-err' }, [f.error, f.detail].filter(Boolean).join('\n')),
+        f.command ? h('div', { class: 'jc-fail-sql' }, h('pre', {}, f.command),
+          h('button', { type: 'button', class: 'btn ghost sm', onclick: () => copyText(f.command).then(() => toast('Statement copied')).catch((err) => toast(err.message, true)) }, icon('copy'), 'Copy SQL')) : '');
+      tech.addEventListener('toggle', () => { if (tech.open) openTech.add(i); else openTech.delete(i); });
+      const tag = st === 'fixed' ? ['good', 'Fixed'] : st === 'again' ? ['critical', 'Failed again'] : harmless ? ['neutral', 'Harmless'] : !f.retry ? ['neutral', 'Cannot be retried'] : null;
+      return h('div', { class: `jc-fail st-${harmless && st === 'open' ? 'harmless' : st}` },
+        h('span', { class: 'jc-fail-icon' }, icon(st === 'fixed' ? 'check' : harmless ? 'info' : 'alert')),
+        h('div', { class: 'jc-fail-main' },
+          h('div', { class: 'jc-fail-title' }, h('span', {}, f.title || f.error), tag ? h('span', { class: `bk-pill sm ${tag[0]}` }, tag[1]) : ''),
+          f.object ? h('div', { class: 'jc-fail-obj' }, f.object) : '',
+          st !== 'fixed' && f.fix ? h('div', { class: 'jc-fix' }, h('strong', {}, 'How to fix: '), f.fix) : '',
+          st !== 'fixed' && f.retry && f.again ? h('div', { class: 'jc-fix again' }, icon('restart'), h('span', {}, f.again)) : '',
+          tech));
+    });
+    failedEl.className = `jc-failed${left.length ? '' : ' all-fixed'}`;
+    failedEl.replaceChildren(
+      h('div', { class: 'jc-failed-head' },
+        h('span', { class: 'jc-failed-icon' }, icon(left.length ? 'alert' : 'check')),
+        h('div', { class: 'jc-failed-text' }, h('div', { class: 'jc-failed-title' }, title), h('div', { class: 'bk-help' }, help)),
+        action),
+      v.retryError ? checkRow('error', v.retryError) : '',
+      h('div', { class: 'jc-fail-list' }, ...items));
   }
 
   function renderSummary(v) {

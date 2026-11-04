@@ -449,7 +449,7 @@ function chooseStep(ctx) {
   const list = h('div', { class: 'clone-pick' });
   const count = h('span', { class: 'muted' });
   const msg = h('div', { class: 'card-error' });
-  const next = h('button', { type: 'button', class: 'btn primary' }, 'Read settings', icon('arrowRight'));
+  const next = h('button', { type: 'button', class: 'btn primary', title: 'Reads the settings of the chosen containers from the source server' }, 'Next: Edit variables', icon('arrowRight'));
   let picked = new Set();
 
   const containers = () => (snaps.get(src.value)?.docker?.containers || []).slice().sort((a, b) => a.name.localeCompare(b.name));
@@ -473,8 +473,9 @@ function chooseStep(ctx) {
     msg.textContent = same ? 'Choose two different servers.' : '';
     next.disabled = !src.value || !dst.value || same || !picked.size;
   }
-  const pickRunning = () => { picked = new Set(containers().filter((c) => c.state === 'running').map((c) => c.name)); renderList(); };
-  src.el.addEventListener('change', pickRunning);
+  // A new source starts with nothing ticked: the containers to copy are picked one by one (or with the quick buttons).
+  const pickNone = () => { picked = new Set(); renderList(); };
+  src.el.addEventListener('change', pickNone);
   dst.el.addEventListener('change', sync);
   filter.addEventListener('input', renderList);
   const quick = (label, fn) => h('button', { type: 'button', class: 'btn sm ghost', onclick: () => { fn(); renderList(); } }, label);
@@ -493,7 +494,7 @@ function chooseStep(ctx) {
   if (draft && draft.sourceId === src.value) {
     picked = new Set(draft.source.specs.map((x) => x.name));
     renderList();
-  } else pickRunning();
+  } else pickNone();
 
   next.addEventListener('click', async () => {
     next.disabled = true;
@@ -515,7 +516,7 @@ function chooseStep(ctx) {
     } catch (err) {
       msg.textContent = err.message;
       next.disabled = false;
-      next.replaceChildren('Read settings', icon('arrowRight'));
+      next.replaceChildren('Next: Edit variables', icon('arrowRight'));
     }
   });
   m.foot.append(h('span', { class: 'spacer' }), next);

@@ -1,7 +1,9 @@
-// Package pgdb backs up, restores and copies PostgreSQL databases that run in Docker containers.
+// Package pgdb backs up, restores and copies PostgreSQL databases that run in Docker containers, or that are
+// installed on the server itself (see native.go).
 //
-// Everything runs inside the database container (docker exec), so pg_dump and pg_restore always match
-// the server version and no client tools are needed on the servers or on this computer:
+// Everything runs inside the database container (docker exec), or as the postgres user with the server's own
+// binaries, so pg_dump and pg_restore always match the server version and no client tools are needed on the
+// servers or on this computer:
 //
 //	server A: pg_dump -Fd -j N (parallel, compressed)  →  tar  ─┐
 //	this computer: relays the stream (and can keep a copy)     ─┤
@@ -48,7 +50,7 @@ var (
 )
 
 func validContainer(c string) error {
-	if !containerRe.MatchString(c) {
+	if !containerRe.MatchString(c) && !IsNative(c) {
 		return errors.New("invalid container name")
 	}
 	return nil
@@ -70,8 +72,12 @@ func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + 
 func ident(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 func lit(s string) string   { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
-// dexec builds `docker exec [-i] <container> sh -c '<script>'`.
+// dexec builds `docker exec [-i] <container> sh -c '<script>'`; for a native server ("native:<port>"), the
+// command that runs the script as the postgres user of the server, with that server's tools.
 func dexec(docker, container string, stdin bool, script string) string {
+	if p := nativePort(container); p > 0 {
+		return nativeExec(p, script)
+	}
 	flag := ""
 	if stdin {
 		flag = "-i "
@@ -148,11 +154,14 @@ type Database struct {
 	Ctype    string `json:"ctype"`
 }
 
-// Instance is a PostgreSQL server running in a container.
+// Instance is a PostgreSQL server running in a container, or installed on the server (Native).
 type Instance struct {
-	Container  string     `json:"container"`
+	Container  string     `json:"container"` // container name, or "native:<port>"
 	Image      string     `json:"image"`
-	Version    int        `json:"version"` // server_version_num, e.g. 160004
+	Native     bool       `json:"native,omitempty"`
+	Port       int        `json:"port,omitempty"`    // native: the port it listens on
+	DataDir    string     `json:"dataDir,omitempty"` // native: its data folder
+	Version    int        `json:"version"`           // server_version_num, e.g. 160004
 	User       string     `json:"user"`
 	Superuser  bool       `json:"superuser"`
 	CreateDB   bool       `json:"createdb"`
@@ -162,6 +171,8 @@ type Instance struct {
 	MemKB      int64      `json:"memKb"`
 	TmpFreeKB  int64      `json:"tmpFreeKb"`  // free space for the dump folder
 	DataFree   int64      `json:"dataFreeKb"` // free space where the databases are stored
+	ShmKB      int64      `json:"shmKb"`      // size of /dev/shm (Docker: 64 MB unless shm_size is set)
+	DSMType    string     `json:"dsmType"`    // dynamic_shared_memory_type: posix keeps it in /dev/shm
 	MaxConn    int        `json:"maxConn"`
 	Conns      int        `json:"conns"`
 	PgDump     string     `json:"pgDump"`
@@ -200,6 +211,8 @@ echo "nproc=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo)"
 echo "mem=$(awk '/^MemTotal/{print $2}' /proc/meminfo 2>/dev/null)"
 echo "tmpfree=$(df -Pk /tmp 2>/dev/null | awk 'NR==2{print $4}')"
 echo "datafree=$(df -Pk "${PGDATA:-/var/lib/postgresql/data}" 2>/dev/null | awk 'NR==2{print $4}')"
+echo "pgdata=$PGDATA"
+echo "shm=$(df -Pk /dev/shm 2>/dev/null | awk 'NR==2{print $2}')"
 echo "pgdump=$(pg_dump --version 2>&1 | head -n 1)"
 echo "@@SQL"
 psql -XAtq -v ON_ERROR_STOP=1 -F "$T" -d "$MDB" 2>&1 <<'SQL'
@@ -207,6 +220,7 @@ select 'version', current_setting('server_version_num');
 select 'super', rolsuper::text, rolcreatedb::text, rolcreaterole::text from pg_roles where rolname = current_user;
 select 'maxconn', current_setting('max_connections');
 select 'conns', count(*)::text from pg_stat_activity;
+select 'dsm', setting from pg_settings where name = 'dynamic_shared_memory_type';
 select 'db', datname,
   case when has_database_privilege(datname, 'CONNECT') then pg_database_size(datname) else -1 end,
   pg_encoding_to_char(encoding), datcollate, datctype
@@ -214,28 +228,50 @@ from pg_database where datallowconn and not datistemplate order by datname;
 SQL
 `
 
-// FindInstances lists the running containers with a PostgreSQL image and what is inside each.
+// FindInstances lists the PostgreSQL servers of a machine and what is inside each: the running containers with
+// a PostgreSQL image, then the servers installed on the machine itself.
 func FindInstances(ctx context.Context, s Side) ([]Instance, error) {
-	out, err := run(ctx, s.Host, s.Docker+` ps --no-trunc --format '{{.Names}}\t{{.Image}}'`, 30*time.Second)
-	if err != nil {
-		return nil, err
+	var list, broken []Instance
+	out, dockerErr := run(ctx, s.Host, s.Docker+` ps --no-trunc --format '{{.Names}}\t{{.Image}}'`, 30*time.Second)
+	if dockerErr == nil {
+		for _, line := range strings.Split(out, "\n") {
+			name, image, ok := strings.Cut(strings.TrimSpace(line), "\t")
+			if ok && imageRe.MatchString(image) && containerRe.MatchString(name) {
+				list = append(list, Instance{Container: name, Image: image})
+			}
+		}
+	} else if noDocker(dockerErr) {
+		dockerErr = nil
 	}
-	var list []Instance
-	for _, line := range strings.Split(out, "\n") {
-		name, image, ok := strings.Cut(strings.TrimSpace(line), "\t")
-		if ok && imageRe.MatchString(image) && containerRe.MatchString(name) {
-			list = append(list, Instance{Container: name, Image: image})
+	native, nativeErr := findNative(ctx, s)
+	for _, in := range native {
+		if in.Error != "" {
+			broken = append(broken, in)
+		} else {
+			list = append(list, in)
 		}
 	}
-	if len(list) == 0 {
+	if len(list) == 0 && len(broken) == 0 {
+		switch {
+		case dockerErr != nil:
+			return nil, dockerErr
+		case nativeErr != nil:
+			return nil, nativeErr
+		}
 		return []Instance{}, nil
+	}
+	if dockerErr != nil { // listed with the reason, next to the servers that work
+		broken = append(broken, Instance{Container: "docker", Error: capital(dockerErr.Error())})
+	}
+	if len(list) == 0 {
+		return broken, nil
 	}
 	// One SSH command probes every candidate.
 	var script strings.Builder
 	for _, in := range list {
-		fmt.Fprintf(&script, "echo @@C %s; %s 2>&1\n", in.Container, dexec(s.Docker, in.Container, false, probeScript))
+		fmt.Fprintf(&script, "echo @@C %s\n%s 2>&1\n", in.Container, dexec(s.Docker, in.Container, false, probeScript))
 	}
-	out, err = run(ctx, s.Host, script.String(), 60*time.Second)
+	out, err := run(ctx, s.Host, script.String(), 60*time.Second)
 	if err != nil && out == "" {
 		return nil, err
 	}
@@ -251,16 +287,36 @@ func FindInstances(ctx context.Context, s Side) ([]Instance, error) {
 	for i := range list {
 		parseProbe(&list[i], blocks[list[i].Container])
 	}
-	sort.Slice(list, func(a, b int) bool { return list[a].Container < list[b].Container })
-	return list, nil
+	// Containers by name, then the native servers by port.
+	sort.Slice(list, func(a, b int) bool {
+		x, y := list[a], list[b]
+		if x.Native != y.Native {
+			return !x.Native
+		}
+		if x.Native {
+			return x.Port < y.Port
+		}
+		return x.Container < y.Container
+	})
+	return append(list, broken...), nil
 }
 
-// Probe reads one container.
+// noDocker tells that Docker is not installed (a server with native PostgreSQL only).
+func noDocker(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "command not found") || strings.Contains(msg, "docker") &&
+		(strings.Contains(msg, "not found") || strings.Contains(msg, "could not be found")) // dash; WSL's stub
+}
+
+// Probe reads one container or native server.
 func Probe(ctx context.Context, s Side, container string) (Instance, error) {
 	if err := validContainer(container); err != nil {
 		return Instance{}, err
 	}
 	in := Instance{Container: container}
+	if p := nativePort(container); p > 0 {
+		in.Native, in.Port = true, p
+	}
 	out, err := run(ctx, s.Host, dexec(s.Docker, container, false, probeScript)+" 2>&1", 60*time.Second)
 	if err != nil && out == "" {
 		return in, err
@@ -296,6 +352,12 @@ func parseProbe(in *Instance, out string) {
 			in.TmpFreeKB, _ = strconv.ParseInt(v, 10, 64)
 		case "datafree":
 			in.DataFree, _ = strconv.ParseInt(v, 10, 64)
+		case "shm":
+			in.ShmKB, _ = strconv.ParseInt(v, 10, 64)
+		case "pgdata":
+			if in.Native {
+				in.DataDir = v
+			}
 		case "pgdump":
 			in.PgDump = v
 		}
@@ -313,6 +375,8 @@ func parseProbe(in *Instance, out string) {
 			in.MaxConn, _ = strconv.Atoi(f[1])
 		case f[0] == "conns" && len(f) == 2:
 			in.Conns, _ = strconv.Atoi(f[1])
+		case f[0] == "dsm" && len(f) == 2:
+			in.DSMType = f[1]
 		case f[0] == "db" && len(f) == 6:
 			size, _ := strconv.ParseInt(f[2], 10, 64)
 			in.Databases = append(in.Databases, Database{Name: f[1], Bytes: size, Encoding: f[3], Collate: f[4], Ctype: f[5]})

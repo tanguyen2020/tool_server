@@ -86,7 +86,7 @@ func (j *Job) housekeep(ctx context.Context) {
 	if !j.spec.hasTarget() {
 		return
 	}
-	if !j.sameContainer() {
+	if !j.sameFiles() {
 		live = sweep(j.dst, j.spec.Target.Container).live
 	}
 	// Temporary databases of jobs that are gone (none of their connections, no live heartbeat).
@@ -120,7 +120,7 @@ func (j *Job) heartbeat() {
 	if j.spec.hasSource() {
 		touch(j.src, j.spec.Source.Container)
 	}
-	if j.spec.hasTarget() && !j.sameContainer() {
+	if j.spec.hasTarget() && !j.sameFiles() {
 		touch(j.dst, j.spec.Target.Container)
 	}
 }

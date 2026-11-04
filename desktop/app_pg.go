@@ -60,10 +60,11 @@ func (h sshHost) Run(ctx context.Context, cmd string, stdin io.Reader, stdout, s
 }
 
 type pgJobs struct {
-	mu      sync.Mutex
-	running map[string]*pgdb.Job
-	history []pgdb.View // finished jobs, newest first
-	loaded  bool
+	mu       sync.Mutex
+	running  map[string]*pgdb.Job
+	history  []pgdb.View // finished jobs, newest first
+	retrying map[string]context.CancelFunc
+	loaded   bool
 }
 
 const pgHistoryMax = 50
@@ -251,13 +252,153 @@ func (a *App) pgWatch(job *pgdb.Job) {
 	}
 }
 
+// PgCancel stops a job, or the retry of a finished job's failed statements.
 func (a *App) PgCancel(id string) {
 	a.pg.mu.Lock()
 	job := a.pg.running[id]
+	stop := a.pg.retrying[id]
 	a.pg.mu.Unlock()
 	if job != nil {
 		job.Cancel()
 	}
+	if stop != nil {
+		stop()
+	}
+}
+
+// PgRetryFailed runs the statements a finished restore could not run (an index, a grant…) again in the
+// restored database, one at a time; the job's view follows each outcome as "pgjob" events.
+func (a *App) PgRetryFailed(id string) error {
+	a.pgLoad()
+	a.pg.mu.Lock()
+	var v pgdb.View
+	found := false
+	for _, h := range a.pg.history {
+		if h.ID == id {
+			v, found = h, true
+			break
+		}
+	}
+	var todo []int
+	for i, f := range v.Failed {
+		if f.Retry && f.Status != "fixed" {
+			todo = append(todo, i)
+		}
+	}
+	var err error
+	switch {
+	case !found:
+		err = errors.New("this job is no longer in the history")
+	case a.pg.retrying[id] != nil:
+		err = errors.New("the failed statements are already being run again")
+	case v.Summary.FinalDatabase == "" || v.Spec.Target.ServerID == "":
+		err = errors.New("this job has no restored database to fix")
+	case len(todo) == 0:
+		err = errors.New("nothing to run again")
+	}
+	if err != nil {
+		a.pg.mu.Unlock()
+		return err
+	}
+	ctx, cancel := context.WithCancel(a.ctx)
+	if a.pg.retrying == nil {
+		a.pg.retrying = map[string]context.CancelFunc{}
+	}
+	a.pg.retrying[id] = cancel
+	a.pg.mu.Unlock()
+	finish := func() {
+		cancel()
+		a.pg.mu.Lock()
+		delete(a.pg.retrying, id)
+		a.pg.mu.Unlock()
+	}
+	side, err := a.pgSide(v.Spec.Target.ServerID)
+	if err != nil {
+		finish()
+		return err
+	}
+	db := v.Summary.FinalDatabase
+	a.pgUpdate(id, func(h *pgdb.View) {
+		h.Retrying, h.RetryErr = true, ""
+		h.Log = append(h.Log, fmt.Sprintf("↻ Running %d failed statement(s) again in %s", len(todo), db))
+	})
+	items := make([]pgdb.FailedStatement, len(todo))
+	for k, i := range todo {
+		items[k] = v.Failed[i]
+	}
+	go func() {
+		defer finish()
+		fixed := 0
+		err := pgdb.RetryStatements(ctx, side, v.Spec.Target.Container, db, "sd-"+id, items, func(k int, err error) {
+			a.pgUpdate(id, func(h *pgdb.View) {
+				if todo[k] >= len(h.Failed) {
+					return
+				}
+				f := &h.Failed[todo[k]]
+				if err == nil {
+					fixed++
+					f.Status = "fixed"
+					h.Log = append(h.Log, "✔ Fixed: "+f.Title)
+				} else {
+					f.Failed(err.Error())
+					h.Log = append(h.Log, "✘ Failed again: "+f.Title)
+				}
+			})
+		})
+		a.pgUpdate(id, func(h *pgdb.View) {
+			h.Retrying = false
+			switch {
+			case ctx.Err() != nil:
+				h.Log = append(h.Log, "Retry stopped")
+			case err != nil:
+				h.RetryErr = err.Error()
+				h.Log = append(h.Log, "✘ Retry: "+err.Error())
+			}
+			// Every statement fixed and nothing else to report: the job is complete after all.
+			left := 0
+			for _, f := range h.Failed {
+				if f.Status != "fixed" {
+					left++
+				}
+			}
+			if h.State == "warning" && left == 0 && len(h.Warnings) == 0 {
+				h.State = "done"
+			}
+			if len(h.Log) > 200 {
+				h.Log = h.Log[len(h.Log)-200:]
+			}
+		})
+		a.pgSave()
+		if ctx.Err() == nil {
+			if err == nil && fixed < len(items) {
+				err = fmt.Errorf("%d of %d statements still fail", len(items)-fixed, len(items))
+			}
+			a.audit(v.Spec.Target.ServerID, "retry failed database statements", fmt.Sprintf("%s: %d of %d fixed", db, fixed, len(items)), err)
+		}
+	}()
+	return nil
+}
+
+// pgUpdate changes a finished job and sends its new view.
+func (a *App) pgUpdate(id string, fn func(*pgdb.View)) {
+	a.pg.mu.Lock()
+	var v *pgdb.View
+	for i := range a.pg.history {
+		if a.pg.history[i].ID == id {
+			v = &a.pg.history[i]
+			break
+		}
+	}
+	if v == nil {
+		a.pg.mu.Unlock()
+		return
+	}
+	fn(v)
+	out := *v
+	out.Failed = append([]pgdb.FailedStatement(nil), v.Failed...)
+	out.Log = append([]string(nil), v.Log...)
+	a.pg.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "pgjob", out)
 }
 
 // PgJobs returns the running jobs, then the finished ones (newest first).
@@ -432,6 +573,9 @@ func (a *App) pgLoad() {
 	b, err := os.ReadFile(a.pgHistoryPath())
 	if err == nil {
 		_ = json.Unmarshal(b, &a.pg.history)
+	}
+	for i := range a.pg.history { // a retry does not survive the app
+		a.pg.history[i].Retrying = false
 	}
 }
 

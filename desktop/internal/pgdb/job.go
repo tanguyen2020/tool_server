@@ -129,7 +129,7 @@ func (s *Spec) Validate() error {
 	if !s.Encrypt && s.Kind != "restore" {
 		s.Passphrase = ""
 	}
-	if s.Kind != "copy" || sameContainer(*s) {
+	if s.Kind != "copy" || sameFiles(*s) {
 		s.Direct = false
 	}
 	if s.Direct {
@@ -217,20 +217,24 @@ type Summary struct {
 
 // View is what the UI shows of a job.
 type View struct {
-	ID       string   `json:"id"`
-	Spec     Spec     `json:"spec"`
-	State    string   `json:"state"` // running, done, warning, failed, cancelled
-	Error    string   `json:"error"`
-	Phases   []Phase  `json:"phases"`
-	Percent  float64  `json:"percent"`
-	Active   []Active `json:"active"`
-	Done     int      `json:"tablesDone"`
-	Total    int      `json:"tablesTotal"`
-	Warnings []string `json:"warnings"`
-	Log      []string `json:"log"`
-	Summary  Summary  `json:"summary"`
-	Started  int64    `json:"started"`
-	Ended    int64    `json:"ended"`
+	ID       string            `json:"id"`
+	Spec     Spec              `json:"spec"`
+	State    string            `json:"state"` // running, done, warning, failed, cancelled
+	Error    string            `json:"error"`
+	ErrorFix string            `json:"errorFix,omitempty"` // how to fix the error, when it is a known one
+	Phases   []Phase           `json:"phases"`
+	Percent  float64           `json:"percent"`
+	Active   []Active          `json:"active"`
+	Done     int               `json:"tablesDone"`
+	Total    int               `json:"tablesTotal"`
+	Warnings []string          `json:"warnings"`
+	Failed   []FailedStatement `json:"failed,omitempty"`     // statements the restore could not run
+	Retrying bool              `json:"retrying,omitempty"`   // the failed statements are being run again
+	RetryErr string            `json:"retryError,omitempty"` // why the last retry could not run
+	Log      []string          `json:"log"`
+	Summary  Summary           `json:"summary"`
+	Started  int64             `json:"started"`
+	Ended    int64             `json:"ended"`
 }
 
 // ------------------------------------------------------------------ job
@@ -380,6 +384,7 @@ func (j *Job) View() View {
 	v := j.v
 	v.Phases = append([]Phase(nil), j.v.Phases...)
 	v.Warnings = append([]string(nil), j.v.Warnings...)
+	v.Failed = append([]FailedStatement(nil), j.v.Failed...)
 	v.Log = append([]string(nil), j.v.Log...)
 	v.Active = append([]Active(nil), j.v.Active...)
 	var sum, w float64
@@ -596,9 +601,9 @@ func (j *Job) run(ctx context.Context) error {
 		j.finishPhase("dump", "done")
 	}
 	switch {
-	case j.sameContainer():
+	case j.sameFiles():
 		j.finishPhase("transfer", "skipped")
-		j.log("Source and target are the same container: nothing to transfer.")
+		j.log("Source and target are on the same machine (same container, or both installed on the server): nothing to transfer.")
 	case s.Direct: // the backup is already on the target
 	default:
 		if err := j.transfer(ctx); err != nil {
@@ -626,7 +631,7 @@ func (j *Job) run(ctx context.Context) error {
 	return nil
 }
 
-func (j *Job) sameContainer() bool { return sameContainer(j.spec) }
+func (j *Job) sameFiles() bool { return sameFiles(j.spec) }
 
 // prepareDirect checks that the target may read the source directly and gives it the source's login.
 func (j *Job) prepareDirect(ctx context.Context) error {
@@ -665,7 +670,10 @@ func (j *Job) end(ctx context.Context, err error) {
 		j.v.State, j.v.Error = "cancelled", "Cancelled"
 	case failed:
 		j.v.State, j.v.Error = "failed", err.Error()
-	case len(j.v.Warnings) > 0:
+		if !strings.Contains(j.v.Error, "already exists") { // the job's own checks say what to do
+			_, j.v.ErrorFix = Explain(j.v.Error)
+		}
+	case len(j.v.Warnings) > 0 || len(j.v.Failed) > 0:
 		j.v.State = "warning"
 	default:
 		j.v.State = "done"
@@ -801,7 +809,7 @@ func (j *Job) cleanup(ctx context.Context, failed bool) {
 	if j.spec.hasSource() && j.src != nil {
 		rm(j.src, j.spec.Source.Container)
 	}
-	if j.spec.hasTarget() && j.dst != nil && !j.sameContainer() {
+	if j.spec.hasTarget() && j.dst != nil && !j.sameFiles() {
 		rm(j.dst, j.spec.Target.Container)
 	}
 	if failed && j.created != "" {
@@ -1344,27 +1352,33 @@ func (j *Job) restore(ctx context.Context) error {
 	j.mu.Lock()
 	j.v.Summary.RestoreJobs = jobs
 	j.mu.Unlock()
-	// Index builds get more memory; each parallel job may use it at once.
-	mwm := int64(256)
-	if j.dstInfo.MemKB > 0 {
-		mwm = min(max(j.dstInfo.MemKB/1024/int64(4*jobs), 64), 1024)
-	}
+	// Index builds get more memory; each parallel job may use it at once. Parallel index workers are turned
+	// off when /dev/shm could not hold their shared memory.
+	mwm, noParallel := indexSettings(j.dstInfo, jobs)
 	tool := fmt.Sprintf("pg_restore -j %d -v --no-tablespaces", jobs)
 	if !s.KeepOwners {
 		tool += " --no-owner --no-privileges"
 	}
 	tool += " -d " + quote(db) + " " + j.dumpPath()
-	tool = fmt.Sprintf("env PGOPTIONS='-c maintenance_work_mem=%dMB -c synchronous_commit=off' ", mwm) + tool
+	opts := fmt.Sprintf("-c maintenance_work_mem=%dMB -c synchronous_commit=off", mwm)
+	if noParallel {
+		opts += " -c max_parallel_maintenance_workers=0"
+	}
+	tool = "env PGOPTIONS='" + opts + "' " + tool
 	j.detail("restore", fmt.Sprintf("Creating the schema · %d parallel jobs", jobs))
 	j.begin("indexes", int64(len(posts)), "Waiting for the data")
 	j.log(fmt.Sprintf("pg_restore into %s: %d tables, %d indexes/constraints, %d parallel jobs, maintenance_work_mem %d MB", db, len(tr.items), len(posts), jobs, mwm))
+	if noParallel {
+		j.log(fmt.Sprintf("/dev/shm of %s is %s: indexes are built without parallel workers", cont, human(j.dstInfo.ShmKB*1024)))
+	}
 	var postDone int64
 	ignored := 0
-	var errLines []string
+	var failures failureParser
 	dataStarted, postStarted := false, false
 	lastSerial := ""
 	err = j.pgCommand(ctx, j.dst, cont, tool, func(l string) {
 		j.log(l)
+		failures.line(l)
 		j.mu.Lock()
 		defer j.mu.Unlock()
 		switch {
@@ -1406,10 +1420,6 @@ func (j *Job) restore(ctx context.Context) error {
 			j.phase("indexes").Done = postDone
 		case ignoredRe.MatchString(l):
 			ignored, _ = strconv.Atoi(ignoredRe.FindStringSubmatch(l)[1])
-		case strings.Contains(l, "error:") || strings.HasPrefix(l, "Command was:"):
-			if len(errLines) < 60 {
-				errLines = append(errLines, strings.TrimPrefix(l, "pg_restore: "))
-			}
 		}
 	}, j.pollCopies(j.dst, cont, db, "COPY FROM", j.dstInfo.Version))
 	if err != nil {
@@ -1420,13 +1430,17 @@ func (j *Job) restore(ctx context.Context) error {
 		if !(errors.As(err, &te) && ignored > 0) {
 			return fmt.Errorf("pg_restore failed: %w", err)
 		}
-		// pg_restore went on after some statements failed (usually missing roles or extensions).
-		j.warn(fmt.Sprintf("%d statement(s) failed during the restore; the rest was restored. See the details below.", ignored))
-		for _, l := range errLines {
-			if len(l) > 400 {
-				l = l[:400] + "…"
-			}
-			j.warn(l)
+		// pg_restore went on after some statements failed (usually missing roles or extensions): each one is
+		// listed with what it means, and can be run again once the restore is complete.
+		failed := failures.result()
+		j.mu.Lock()
+		j.v.Failed = failed
+		j.mu.Unlock()
+		for _, f := range failed {
+			j.log("⚠ " + f.Title)
+		}
+		if len(failed) == 0 || failures.dropped > 0 || ignored > len(failed) {
+			j.warn(fmt.Sprintf("%d statement(s) failed during the restore; the rest was restored. The technical log has the details.", ignored))
 		}
 	}
 	j.mu.Lock()

@@ -160,7 +160,7 @@ func describeStream(r io.Reader, info *FileInfo) error {
 
 // Check is one line of the preflight report.
 type Check struct {
-	Level string `json:"level"` // ok, warn, error
+	Level string `json:"level"` // ok, info, warn, error
 	Text  string `json:"text"`
 }
 
@@ -194,7 +194,7 @@ func RunPreflight(ctx context.Context, spec Spec, src, dst *Side) Preflight {
 	if spec.hasSource() {
 		in, err := Probe(ctx, *src, spec.Source.Container)
 		if err != nil {
-			add("error", "Source %s / %s: %s", src.Server, spec.Source.Container, err)
+			add("error", "Source %s / %s: %s", src.Server, DisplayName(spec.Source.Container), err)
 		} else {
 			p.Source = &in
 			db, ok := in.Database(spec.Source.Database)
@@ -214,7 +214,7 @@ func RunPreflight(ctx context.Context, spec Spec, src, dst *Side) Preflight {
 					estimate = 64 << 20
 				}
 				if in.TmpFreeKB > 0 && in.TmpFreeKB*1024 < estimate {
-					add("warn", "Only %s free in /tmp of %s on %s; the backup may need up to about %s", human(in.TmpFreeKB*1024), in.Container, src.Server, human(estimate))
+					add("warn", "Only %s free in /tmp of %s on %s; the backup may need up to about %s", human(in.TmpFreeKB*1024), DisplayName(in.Container), src.Server, human(estimate))
 				}
 				add("ok", "Backup with %d parallel jobs, %s compression", p.DumpJobs, p.Compression)
 				if spec.Roles && spec.hasTarget() {
@@ -271,7 +271,7 @@ func RunPreflight(ctx context.Context, spec Spec, src, dst *Side) Preflight {
 	if spec.hasTarget() {
 		in, err := Probe(ctx, *dst, spec.Target.Container)
 		if err != nil {
-			add("error", "Target %s / %s: %s", dst.Server, spec.Target.Container, err)
+			add("error", "Target %s / %s: %s", dst.Server, DisplayName(spec.Target.Container), err)
 		} else {
 			p.Target = &in
 			p.RestoreJobs = autoJobs(spec.restoreWant(), in)
@@ -302,8 +302,16 @@ func RunPreflight(ctx context.Context, spec Spec, src, dst *Side) Preflight {
 					add("warn", "Database %s already exists on %s: it is renamed to %s_old_<date> once the new copy is complete", spec.Target.Database, dst.Server, trimName(spec.Target.Database, 40))
 				}
 			}
-			if !sameContainer(spec) && in.TmpFreeKB > 0 && estimate > 0 && in.TmpFreeKB*1024 < estimate {
-				add("warn", "Only %s free in /tmp of %s on %s for the backup files (about %s expected)", human(in.TmpFreeKB*1024), in.Container, dst.Server, human(estimate))
+			if !sameFiles(spec) && in.TmpFreeKB > 0 && estimate > 0 && in.TmpFreeKB*1024 < estimate {
+				add("warn", "Only %s free in /tmp of %s on %s for the backup files (about %s expected)", human(in.TmpFreeKB*1024), DisplayName(in.Container), dst.Server, human(estimate))
+			}
+			if _, noParallel := indexSettings(in, p.RestoreJobs); noParallel && !spec.SchemaOnly {
+				more := "For faster index builds, give the container more: shm_size: 1gb in docker-compose.yml, or docker run --shm-size=1g"
+				if in.Native {
+					more = "For faster index builds, make /dev/shm of the server bigger (the size= option of its tmpfs mount)"
+				}
+				add("info", "%s has only %s of shared memory (/dev/shm), so indexes are built without parallel workers: slower for big tables, but it cannot run out. %s",
+					capital(DisplayName(in.Container)), human(in.ShmKB*1024), more)
 			}
 			need := srcDB.Bytes // an existing database stays until the new one is complete, so it frees nothing
 			if in.DataFree > 0 && need > 0 && in.DataFree*1024 < need {
@@ -320,7 +328,7 @@ func RunPreflight(ctx context.Context, spec Spec, src, dst *Side) Preflight {
 	switch {
 	case spec.Direct && p.Source != nil && p.Target != nil:
 		p.Direct = checkDirect(ctx, spec, src, dst, p.Source, p.Target, add)
-	case spec.Kind == "copy" && !sameContainer(spec):
+	case spec.Kind == "copy" && !sameFiles(spec):
 		add("ok", "The data goes through this computer (the servers do not need to reach each other)")
 	}
 	p.OK = true

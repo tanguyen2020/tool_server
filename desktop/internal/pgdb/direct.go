@@ -96,6 +96,11 @@ func serverAddresses(ctx context.Context, s Side) []string {
 
 // candidates are the addresses to try, best first.
 func candidates(ctx context.Context, spec Spec, src *Side) ([]Address, error) {
+	if IsNative(spec.Source.Container) {
+		// Its login is the postgres user over the local socket, without a password: nothing to give the target.
+		return nil, errors.New("the source is PostgreSQL installed on the server, which logs in as postgres without a password " +
+			"(peer authentication): another server cannot log in to it, so the data goes through this computer")
+	}
 	port := spec.DirectPort
 	bind := ""
 	if port == 0 {
@@ -238,8 +243,8 @@ func DetectDirect(ctx context.Context, spec Spec, src, dst *Side) DirectCheck {
 	if err := spec.Validate(); err != nil {
 		return DirectCheck{Message: capital(err.Error())}
 	}
-	if sameContainer(spec) {
-		return DirectCheck{Message: "the source and the target are the same container"}
+	if sameFiles(spec) {
+		return DirectCheck{Message: "the source and the target are on the same machine: nothing to transfer"}
 	}
 	var srcIn, dstIn Instance
 	var srcErr, dstErr error
