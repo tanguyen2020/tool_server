@@ -1,4 +1,4 @@
-import { h, fmtTime } from './util.js';
+import { h, fmtTime, kbd } from './util.js';
 import { cssVar, niceMax, setupCanvas, drawYGrid, drawTimeTicks, charts, drawEventMarkers, eventRows, leftPad, fillUnder, drawCrosshair, FONT } from './chart.js';
 
 // The 8 validated categorical slots. More hues would be indistinguishable, so only the
@@ -205,7 +205,7 @@ export class SeriesPanel {
         const sw = h('i', { class: 'key' });
         const cells = [h('td', {}, sw), h('td', { class: 'name' }, s.name), ...this.heads.slice(1).map(() => h('td', { class: 'num' }))];
         const tr = h('tr', {
-          title: 'Click to show only this one · Ctrl+click to add or remove',
+          title: kbd('Click to show only this one · Ctrl+click to add or remove'),
           onmouseenter: () => { this.legendHover = s.name; this.syncRows(); this.schedule(); },
           onmouseleave: () => { this.legendHover = null; this.syncRows(); this.schedule(); },
           onclick: (e) => this.isolate(s.name, e.ctrlKey || e.metaKey || e.shiftKey),

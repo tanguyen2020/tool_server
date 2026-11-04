@@ -34,7 +34,7 @@
   --lvl-unknown: #4a4a46;
   --radius: 8px;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace;
 }
 
 /* Light: white panels on a light gray page so cards and panels stand out. */
@@ -855,7 +855,7 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .dialog.confirm.tone-danger { --tone: var(--critical); }
 .dialog.confirm.tone-warning { --tone: var(--warning); }
 .dialog.confirm.closing { animation: confirm-out 0.12s ease-in forwards; }
-.dialog.confirm::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
+.dialog.confirm::backdrop { background: var(--backdrop); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
 @keyframes confirm-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes confirm-out { to { opacity: 0; transform: scale(0.98); } }
 .confirm-main { display: flex; gap: 14px; padding: 20px 20px 16px; }
@@ -897,7 +897,9 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .card.compact .meter { height: 5px; }
 .card-chips.one-line { flex-wrap: nowrap; overflow: hidden; min-height: 22px; align-items: center; }
 .card-chips.one-line .chip { white-space: nowrap; flex-shrink: 0; }
-.card-chips.one-line .chip:not(.more) { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A chip that has to shrink ends in "…": ellipsis needs a block box, so the dot becomes an inline box. */
+.card-chips.one-line .chip:not(.more) { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; }
+.card-chips.one-line .chip:not(.more)::before { display: inline-block; vertical-align: middle; margin: -2px 5px 0 0; }
 .chip.more { background: var(--surface-2); color: var(--ink-2); font-weight: 600; }
 .chip.more::before { display: none; }
 .ok-line { font-size: 12px; color: var(--good); }
@@ -916,8 +918,8 @@ svg.i { width: 15px; height: 15px; flex-shrink: 0; fill: none; stroke: currentCo
 .cell-pct { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .cell-pct > span { min-width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
 .cell-meter { width: 70px; height: 5px; }
-.srv-issues { max-width: 360px; }
-.servers-table .small { white-space: nowrap; }
+.srv-issues { max-width: 400px; }
+.servers-table .small, .servers-table td.num { white-space: nowrap; } /* "110d 5h" stays on one line (wider macOS font) */
 @media (max-width: 1300px) {
   .servers-table th:nth-child(7), .servers-table td:nth-child(7) { display: none; } /* uptime */
   .cell-meter { width: 48px; }
@@ -2042,7 +2044,7 @@ select:not([multiple]):not([size]) { appearance: none; -webkit-appearance: none;
 .cl-panel .clone-pick { max-height: 52vh; }
 .cl-foot { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 8px; margin: 0 -2px; padding: 12px 16px;
   border: 1px solid var(--border); border-radius: 14px 14px 0 0; border-bottom: 0;
-  background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(8px); box-shadow: 0 -6px 18px -12px rgba(0, 0, 0, 0.35); }
+  background: color-mix(in srgb, var(--surface) 92%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: 0 -6px 18px -12px rgba(0, 0, 0, 0.35); }
 .cl-foot:empty { display: none; }
 .cl-foot .spacer { flex: 1; }
 .cl-foot .btn { height: 34px; }

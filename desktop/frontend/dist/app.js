@@ -1,4 +1,4 @@
-import { h, toast, fmtBytes, fmtRate, fmtPct, fmtUptime, fmtTime, meter, setMeter, statusChip, level } from './util.js';
+import { h, toast, fmtBytes, fmtRate, fmtPct, fmtUptime, fmtTime, meter, setMeter, statusChip, level, localizeShortcuts } from './util.js';
 import { TimeChart } from './chart.js';
 import { SeriesPanel } from './series-chart.js';
 import { initLogs, openLogs, onLogsSnapshot } from './logs.js';
@@ -1371,6 +1371,7 @@ document.addEventListener('task:exit', (e) => {
 setAlertSettingsHandler(() => state.settings, (next) => { state.settings = next; });
 
 initLogs();
+localizeShortcuts(); // ⌘ instead of Ctrl in the tooltips of index.html on a Mac
 initTerminals();
 initDock({ snapshot: (id) => state.snaps.get(id) });
 // Sticky offsets: the tab strip sits under the top bar, a server header under both (heights measured, not guessed).

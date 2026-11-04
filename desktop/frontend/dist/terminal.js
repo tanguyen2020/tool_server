@@ -3,7 +3,7 @@
 import { Terminal } from './vendor/xterm.mjs';
 import { FitAddon } from './vendor/addon-fit.mjs';
 import { SearchAddon } from './vendor/addon-search.mjs';
-import { h, toast } from './util.js';
+import { h, toast, IS_MAC, kbd } from './util.js';
 import { call, on, copyText } from './bridge.js';
 import { cssVar } from './chart.js';
 
@@ -86,7 +86,8 @@ export function createTerminal(serverSnap, opts = '') {
   const el = h('div', { class: 'term-view' });
   host.append(el);
   const xterm = new Terminal({
-    fontFamily: '"Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace',
+    // Windows, macOS, Linux: without Menlo a Mac falls back to Courier.
+    fontFamily: '"Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace',
     fontSize,
     cursorBlink: true,
     scrollback: 5000,
@@ -125,10 +126,19 @@ export function createTerminal(serverSnap, opts = '') {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { if (t.id && !t.ended) call('TermResize', t.id, cols, rows).catch(() => {}); }, 80);
   });
-  // Copy / paste like Windows Terminal; keep the app's own shortcuts out of the shell.
+  // Copy / paste like Windows Terminal (like Terminal.app on a Mac); keep the app's own shortcuts out of the shell.
   xterm.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
     const k = e.key.toLowerCase();
+    if (IS_MAC) {
+      // Ctrl keys (Ctrl+C, Ctrl+W…) go to the shell. ⌘C / ⌘V go through the Edit menu to xterm's own copy
+      // and paste handling; ⌘W, ⌘1..9 to the app (dock.js, tabs.js). No ⌘ key ever reaches the shell.
+      if (!e.metaKey || e.ctrlKey || e.altKey) return true;
+      const act = { a: () => xterm.selectAll(), f: () => document.dispatchEvent(new CustomEvent('term:search')),
+        '=': () => setFontSize(fontSize + 1), '+': () => setFontSize(fontSize + 1), '-': () => setFontSize(fontSize - 1) }[k];
+      if (act) { e.preventDefault(); act(); }
+      return false;
+    }
     if (e.ctrlKey && e.shiftKey && k === 'c') { copySelection(t); return false; }
     if (e.ctrlKey && e.shiftKey && k === 'v') { paste(t); e.preventDefault(); return false; }
     if (e.ctrlKey && e.shiftKey && k === 'f') { document.dispatchEvent(new CustomEvent('term:search')); return false; }
@@ -212,7 +222,7 @@ export function initTerminals() {
     t.ended = true;
     if (t.task?.once) {
       t.finished = true;
-      t.xterm.write('\r\n\x1b[2mFinished. Close this tab with ✕ or Ctrl+Shift+W.\x1b[0m\r\n');
+      t.xterm.write(`\r\n\x1b[2mFinished. Close this tab with ✕ or ${kbd('Ctrl+Shift+W')}.\x1b[0m\r\n`);
     } else {
       t.xterm.write(`\r\n\x1b[2m[${msg.reason}] Press Enter to reconnect.\x1b[0m\r\n`);
     }

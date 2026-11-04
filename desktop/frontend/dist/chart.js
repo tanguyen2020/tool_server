@@ -159,6 +159,11 @@ export const charts = new Set();
 const redrawAll = () => charts.forEach((c) => c.draw());
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redrawAll);
 new MutationObserver(redrawAll).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+// ...and when the window moves to a screen with another pixel density (Retina ↔ external monitor), or the
+// page zoom changes: the canvas backing store is sized for one devicePixelRatio and turns blurry on another.
+(function watchDpr() {
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change', () => { redrawAll(); watchDpr(); }, { once: true });
+})();
 
 // Time-series line chart: single Y axis, crosshair + tooltip.
 // yMax: number or function (null = auto). Auto scale can be bounded: minMax (smallest top, so near-idle noise is

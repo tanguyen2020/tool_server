@@ -1,7 +1,7 @@
 // Browser-like tabs: a fixed Overview tab, one tab per opened server, the Backup & Restore tab and the Clone tab.
 // Each tab keeps its own view (sub-tab, filters, scroll, log panel). Hidden tabs don't render;
 // they remember which servers changed and catch up when shown.
-import { h } from './util.js';
+import { h, IS_MAC, isMod, kbd } from './util.js';
 import { openMenu } from './context-menu.js';
 import { icon } from './icons.js';
 
@@ -145,7 +145,7 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
         role: 'tab',
         tabindex: selected ? '0' : '-1',
         'aria-selected': String(selected),
-        title: `${d.tooltip || d.title}${i < 9 ? ` · Ctrl+${i + 1}` : ''}`,
+        title: `${d.tooltip || d.title}${i < 9 ? ` · ${kbd(`Ctrl+${i + 1}`)}` : ''}`,
         onclick: (e) => { if (!e.target.closest('.app-tab-close')) location.hash = hashFor(key); },
         onauxclick: (e) => { if (e.button === 1) { e.preventDefault(); requestClose(key); } },
         onmousedown: (e) => { if (e.button === 1) e.preventDefault(); },
@@ -160,22 +160,27 @@ export function createTabManager({ strip, host, create, describe, onActivate, on
       h('span', { class: 'app-tab-title' }, d.title),
       d.badge ? h('span', { class: `tab-badge ${d.badgeTone || ''}`, title: d.badgeTitle }, d.badge) : null,
       key === 'overview' ? null : h('button', {
-        type: 'button', class: 'app-tab-close', 'aria-label': `Close ${d.title}`, title: 'Close (Ctrl+W)',
+        type: 'button', class: 'app-tab-close', 'aria-label': `Close ${d.title}`, title: kbd('Close (Ctrl+W)'),
         onclick: () => requestClose(key),
       }, icon('close')));
       return btn;
     }));
   }
 
-  // Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+W, Ctrl+1..9
+  // Ctrl+Tab / Ctrl+Shift+Tab (on a Mac too: ⌘Tab is the system's), Ctrl+W, Ctrl+1..9 (⌘W, ⌘1..9 on a Mac).
   document.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey || e.altKey || document.querySelector('dialog[open]')) return;
-    if (e.target.closest?.('.xterm')) return; // Ctrl+W, Ctrl+Tab… belong to the shell inside a terminal
-    if (e.key === 'Tab') {
+    if (e.altKey || document.querySelector('dialog[open]')) return;
+    // In a terminal the Ctrl keys (Ctrl+W, Ctrl+Tab…) belong to the shell; ⌘ keys never do.
+    const inShell = !!e.target.closest?.('.xterm');
+    if (e.key === 'Tab' && e.ctrlKey && !e.metaKey) {
+      if (inShell) return;
       e.preventDefault();
       const i = order.indexOf(active);
       location.hash = hashFor(order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length]);
-    } else if (e.key.toLowerCase() === 'w' && !e.shiftKey && active !== 'overview') {
+      return;
+    }
+    if (!isMod(e) || (inShell && !IS_MAC)) return;
+    if (e.key.toLowerCase() === 'w' && !e.shiftKey && active !== 'overview') {
       e.preventDefault();
       requestClose(active);
     } else if (/^[1-9]$/.test(e.key) && order[Number(e.key) - 1]) {

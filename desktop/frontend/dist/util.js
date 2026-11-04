@@ -13,6 +13,17 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+// A Mac uses ⌘ where Windows and Linux use Ctrl (Ctrl stays the shell's: Ctrl+C, Ctrl+W in a terminal).
+export const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+export const isMod = (e) => (IS_MAC ? e.metaKey : e.ctrlKey);
+// Shortcut text in the platform's words: 'Ctrl+Shift+W' → '⇧⌘W', 'Ctrl+click' → '⌘-click' on a Mac.
+export const kbd = (s) => (IS_MAC ? s.replace(/Ctrl\+Shift\+/g, '⇧⌘').replace(/Ctrl\+click/g, '⌘-click').replace(/Ctrl\+/g, '⌘') : s);
+// Rewrites the shortcuts written in titles of static markup (index.html).
+export function localizeShortcuts(root = document) {
+  if (!IS_MAC) return;
+  for (const el of root.querySelectorAll('[title*="Ctrl"]')) el.title = kbd(el.title);
+}
+
 export function fmtBytes(b, digits = 1) {
   if (b == null || Number.isNaN(b)) return '–';
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];

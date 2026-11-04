@@ -1,6 +1,6 @@
 // Files tab: browse the server over SFTP (same SSH connection), edit text files, upload / download,
 // create, rename and delete. Root-owned files are read and saved with sudo when the user may.
-import { h, toast, fmtBytes } from './util.js';
+import { h, toast, fmtBytes, kbd, isMod } from './util.js';
 import { call, on, confirmDialog, copyText } from './bridge.js';
 import { openMenu } from './context-menu.js';
 import { panel, promptText, fmtDateTime } from './ui.js';
@@ -48,14 +48,14 @@ export function filesTab(serverId, { openShellAt, serverName }) {
   const edState = h('span', { class: 'muted ed-state' });
   const edPos = h('span', { class: 'muted ed-pos' });
   const area = h('textarea', { class: 'editor mono', spellcheck: 'false', wrap: 'off', 'aria-label': 'File content' });
-  const saveBtn = btn('save', 'Save (Ctrl+S)', 'act-start', () => save());
+  const saveBtn = btn('save', kbd('Save (Ctrl+S)'), 'act-start', () => save());
   const reloadBtn = btn('refresh', 'Reload', 'act-restart', () => openFile(file.path, true));
   const dlBtn = btn('download', 'Download', 'act-logs', () => download(file.path));
   const closeEdBtn = btn('close', 'Close', 'act-remove', () => closeEditor());
   const editorView = h('div', { class: 'editor-view', hidden: true },
     h('div', { class: 'toolbar' }, edPath, edBadge, edState, h('span', { class: 'spacer' }), saveBtn, reloadBtn, dlBtn, closeEdBtn),
     area,
-    h('div', { class: 'ed-foot' }, edPos, h('span', { class: 'muted' }, 'Tab inserts a tab · Ctrl+S saves · Esc closes')));
+    h('div', { class: 'ed-foot' }, edPos, h('span', { class: 'muted' }, kbd('Tab inserts a tab · Ctrl+S saves · Esc closes'))));
   p.body.append(listView, editorView);
 
   let cwd = '';
@@ -261,7 +261,7 @@ export function filesTab(serverId, { openShellAt, serverName }) {
   area.addEventListener('click', updatePos);
   area.addEventListener('keyup', updatePos);
   area.addEventListener('keydown', (e) => {
-    if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (dirty()) save(); }
+    if (e.key === 's' && isMod(e)) { e.preventDefault(); if (dirty()) save(); }
     else if (e.key === 'Escape') { e.preventDefault(); closeEditor(); }
     else if (e.key === 'Tab' && !e.ctrlKey) {
       e.preventDefault();

@@ -1,6 +1,6 @@
 // The bottom panel of a server tab, like VS Code's panel: one Logs session plus any number of terminals,
 // each in its own dock tab. Sessions keep running when the panel is collapsed or another server tab is shown.
-import { h } from './util.js';
+import { h, IS_MAC, isMod } from './util.js';
 import { icon, setLabel } from './icons.js';
 import { openMenu } from './context-menu.js';
 import { setLogsTab, closeTabLogs, hasLogs, logsTitle, showLogsPane, hideLogsPane } from './logs.js';
@@ -208,12 +208,13 @@ export function initDock({ snapshot }) {
   document.addEventListener('term:search', openSearch);
   // Capture phase: runs before the app's tab shortcuts and before xterm sees the key.
   window.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey || e.altKey || e.key.toLowerCase() !== 'w' || panel.hidden) return;
+    if (!isMod(e) || e.altKey || e.key.toLowerCase() !== 'w' || panel.hidden) return;
     if (e.target.closest?.('dialog')) return;
     const inDock = panel.contains(e.target);
     const inTerminal = !!e.target.closest?.('.xterm');
     // Ctrl+Shift+W anywhere, or Ctrl+W in the panel outside a shell (where Ctrl+W deletes a word).
-    if (e.shiftKey || (inDock && !inTerminal)) {
+    // On a Mac ⌘W never belongs to the shell, so in the panel it closes the terminal too, like Terminal.app.
+    if (e.shiftKey || (inDock && (IS_MAC || !inTerminal))) {
       if (closeActiveItem()) {
         e.preventDefault();
         e.stopPropagation();

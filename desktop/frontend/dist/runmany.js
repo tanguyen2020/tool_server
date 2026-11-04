@@ -1,5 +1,5 @@
 // "Run on servers": one command on several servers at once, results side by side.
-import { h, toast } from './util.js';
+import { h, toast, isMod, kbd } from './util.js';
 import { call, on, confirmDialog, copyText } from './bridge.js';
 import { modal } from './ui.js';
 import { icon } from './icons.js';
@@ -118,14 +118,14 @@ export function openRunMany(servers, snaps, preselect = []) {
   }
   runBtn.addEventListener('click', run);
   cancelBtn.addEventListener('click', () => runId && call('CancelRun', runId));
-  command.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); run(); } });
+  command.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isMod(e)) { e.preventDefault(); run(); } });
   snipBtn.addEventListener('click', (e) => snippetMenu(e, snipBtn, '', servers, (s) => { command.value = s.command; command.focus(); }));
 
   m.body.append(h('div', { class: 'rm-layout' },
     h('div', { class: 'rm-left' }, h('div', { class: 'rm-left-head' }, filter, countEl,
       h('button', { type: 'button', class: 'btn sm ghost', onclick: () => { selected.clear(); renderServers(); } }, 'None')), listEl),
     h('div', { class: 'rm-right' },
-      h('label', { class: 'rm-cmd-label' }, h('span', {}, 'Command ', h('span', { class: 'muted' }, '(Ctrl+Enter to run)')), snipBtn),
+      h('label', { class: 'rm-cmd-label' }, h('span', {}, 'Command ', h('span', { class: 'muted' }, kbd('(Ctrl+Enter to run)'))), snipBtn),
       command,
       h('div', { class: 'rm-actions' }, timeout, h('span', { class: 'spacer' }), cancelBtn, runBtn),
       summary, out)));
