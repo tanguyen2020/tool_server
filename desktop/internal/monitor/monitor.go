@@ -26,6 +26,7 @@ const (
 	loopRestarts   = 3 // restarts within loopWindow that count as a restart loop
 	maintRetry     = 10 * time.Minute
 	rebootTimeout  = 15 * time.Minute // a rebooting server that is not back by then raises an alert
+	wakeGap        = time.Minute      // a polling pause this much longer than expected means the computer slept
 )
 
 type Point struct {
@@ -116,6 +117,7 @@ type Monitor struct {
 	prev     map[string]*raw
 	history  map[string][]Point
 	inFlight map[string]bool
+	again    map[string]bool // a collection was asked for while one was running: run it once that one ends
 	fails    map[string]int
 	expected map[string]time.Time              // containers stopped by the user -> no alert
 	alerts   map[string]map[string]*alertState // server -> alert key -> state
@@ -139,7 +141,7 @@ func New(st *store.Store, pool *sshpool.Pool) *Monitor {
 	m := &Monitor{
 		st: st, pool: pool, visible: true, wake: make(chan struct{}, 1),
 		snaps: map[string]*Snapshot{}, prev: map[string]*raw{}, history: map[string][]Point{},
-		inFlight: map[string]bool{}, fails: map[string]int{}, expected: map[string]time.Time{},
+		inFlight: map[string]bool{}, again: map[string]bool{}, fails: map[string]int{}, expected: map[string]time.Time{},
 		alerts: map[string]map[string]*alertState{},
 		maint:  map[string]*hostinfo.Maintenance{}, maintAt: map[string]time.Time{}, maintRun: map[string]bool{}, reboots: map[string]*rebootState{}, certWarn: loadCertNotes(st.Dir()),
 		restarts: map[string]map[string]int{}, restartsAt: map[string]time.Time{}, restartLog: map[string]map[string][]time.Time{},
@@ -177,7 +179,15 @@ func (m *Monitor) onServerChange(id string) {
 // Run loops until ctx is cancelled. Each server is collected independently,
 // so a slow or hung server never delays the others.
 func (m *Monitor) Run(ctx context.Context) {
+	var last time.Time
 	for {
+		// The wall clock jumped well past the polling interval: the computer slept. Its SSH connections
+		// usually died meanwhile without being closed, so check them before collecting.
+		now := time.Now()
+		if !last.IsZero() && now.Round(0).Sub(last.Round(0)) > idleInterval+wakeGap {
+			m.pool.CheckAll()
+		}
+		last = now
 		for _, s := range m.st.List() {
 			go m.Collect(s.ID)
 		}
@@ -284,9 +294,32 @@ func (m *Monitor) rebootLocked(srv store.Server, snap *Snapshot, ok bool) (bool,
 	return true, nil
 }
 
-func (m *Monitor) Collect(id string) {
+// Reconnect connects to a server again right away (instead of waiting out the retry delay) and
+// collects as soon as it can. A connection that still answers is kept.
+func (m *Monitor) Reconnect(id string) {
+	m.pool.Reconnect(id)
+	m.collect(id, true)
+}
+
+// ReconnectAll is for when the network is back or the computer wakes up: drops the connections that
+// died meanwhile, clears the retry delays and collects every server at once.
+func (m *Monitor) ReconnectAll() {
+	m.pool.CheckAll()
+	for _, s := range m.st.List() {
+		go m.collect(s.ID, true)
+	}
+}
+
+func (m *Monitor) Collect(id string) { m.collect(id, false) }
+
+// collect fetches one server's snapshot. When one is already running, queue runs another right after it
+// (an explicit request must not be lost behind a collection that is stuck on a dead connection).
+func (m *Monitor) collect(id string, queue bool) {
 	m.mu.Lock()
 	if m.inFlight[id] {
+		if queue {
+			m.again[id] = true
+		}
 		m.mu.Unlock()
 		return
 	}
@@ -308,7 +341,12 @@ func (m *Monitor) Collect(id string) {
 	defer func() {
 		m.mu.Lock()
 		delete(m.inFlight, id)
+		again := m.again[id]
+		delete(m.again, id)
 		m.mu.Unlock()
+		if again {
+			go m.collect(id, false)
+		}
 	}()
 
 	srv, ok := m.st.Get(id)

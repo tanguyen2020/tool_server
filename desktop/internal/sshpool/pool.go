@@ -243,6 +243,40 @@ func (c *Conn) keepalive(client *ssh.Client) {
 	}
 }
 
+// alive asks the server to answer a keepalive within timeout; a connection that does not is closed.
+// After a sleep or a network change a connection often still looks open but never answers again.
+func alive(client *ssh.Client, timeout time.Duration) bool {
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if err == nil {
+			return true
+		}
+	case <-time.After(timeout):
+	}
+	_ = client.Close()
+	return false
+}
+
+// probeTimeout: how long a live connection may take to answer when it is checked on demand.
+const probeTimeout = 5 * time.Second
+
+// check drops the connection when it no longer answers and forgets the last failure,
+// so the next call connects right away instead of waiting out retryAfter.
+func (c *Conn) check() {
+	c.mu.Lock()
+	client := c.client
+	c.lastErr = nil
+	c.mu.Unlock()
+	if client != nil && !alive(client, probeTimeout) {
+		c.drop(client)
+	}
+}
+
 func (c *Conn) drop(client *ssh.Client) {
 	c.mu.Lock()
 	if c.client == client {
@@ -299,20 +333,53 @@ func (c *Conn) SFTP() (*sftp.Client, error) {
 	return s, nil
 }
 
+// sessionTimeout: a healthy connection opens a session at once; one that takes this long is dead.
+const sessionTimeout = 15 * time.Second
+
+// newSession opens a session, dropping the connection when it is broken or does not answer.
+// Without the time limit, a connection that died silently would hang every command until keepalive notices.
+func (c *Conn) newSession(client *ssh.Client) (*ssh.Session, error) {
+	type opened struct {
+		sess *ssh.Session
+		err  error
+	}
+	ch := make(chan opened, 1)
+	go func() {
+		s, err := client.NewSession()
+		ch <- opened{s, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			// Failing to open a session usually means the connection is broken -> reconnect next time.
+			if !strings.Contains(r.err.Error(), "administratively prohibited") {
+				_ = client.Close()
+				c.drop(client)
+			}
+			return nil, fmt.Errorf("cannot open SSH session: %w", r.err)
+		}
+		return r.sess, nil
+	case <-time.After(sessionTimeout):
+		_ = client.Close()
+		c.drop(client)
+		go func() {
+			if r := <-ch; r.sess != nil {
+				_ = r.sess.Close()
+			}
+		}()
+		return nil, errors.New("the connection stopped answering; reconnecting")
+	}
+}
+
 // Exec runs a command and waits for its result, up to timeout.
 func (c *Conn) Exec(ctx context.Context, cmd string, timeout time.Duration) (Result, error) {
 	client, err := c.get()
 	if err != nil {
 		return Result{}, err
 	}
-	sess, err := client.NewSession()
+	sess, err := c.newSession(client)
 	if err != nil {
-		// Failing to open a session usually means the connection is broken -> drop it and reconnect next time.
-		if !strings.Contains(err.Error(), "administratively prohibited") {
-			_ = client.Close()
-			c.drop(client)
-		}
-		return Result{}, fmt.Errorf("cannot open SSH session: %w", err)
+		return Result{}, err
 	}
 	defer sess.Close()
 	var stdout, stderr bytes.Buffer
@@ -357,9 +424,9 @@ func (c *Conn) Stream(cmd string) (*Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess, err := client.NewSession()
+	sess, err := c.newSession(client)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open SSH session: %w", err)
+		return nil, err
 	}
 	out, err := sess.StdoutPipe()
 	if err != nil {
@@ -387,9 +454,9 @@ func (c *Conn) Start(cmd string) (*Proc, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess, err := client.NewSession()
+	sess, err := c.newSession(client)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open SSH session: %w", err)
+		return nil, err
 	}
 	p := &Proc{sess: sess, stderr: &bytes.Buffer{}}
 	sess.Stderr = p.stderr
@@ -487,6 +554,43 @@ func (p *Pool) Drop(id string) {
 	}
 }
 
+// Reconnect makes the next call to a server connect right away instead of waiting out the retry delay.
+// The server's connection and those of its jump hosts are dropped only when they no longer answer,
+// so work still running on a working connection (a transfer, a backup, a terminal) is not cut.
+func (p *Pool) Reconnect(id string) {
+	seen := map[string]bool{}
+	for id != "" && !seen[id] {
+		seen[id] = true
+		c, err := p.Get(id)
+		if err != nil {
+			return
+		}
+		c.check()
+		id = c.srv.JumpID
+	}
+}
+
+// CheckAll drops every connection that no longer answers and clears the retry delays, in parallel.
+// Used when the network comes back or the computer wakes up; connections that still work
+// (open terminals, running transfers) are left alone.
+func (p *Pool) CheckAll() {
+	p.mu.Lock()
+	conns := make([]*Conn, 0, len(p.conns))
+	for _, c := range p.conns {
+		conns = append(conns, c)
+	}
+	p.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, c := range conns {
+		wg.Add(1)
+		go func(c *Conn) {
+			defer wg.Done()
+			c.check()
+		}(c)
+	}
+	wg.Wait()
+}
+
 func (p *Pool) CloseAll() {
 	p.mu.Lock()
 	conns := p.conns
@@ -539,9 +643,9 @@ func (c *Conn) Terminal(cols, rows int, command string) (*Term, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess, err := client.NewSession()
+	sess, err := c.newSession(client)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open SSH session: %w", err)
+		return nil, err
 	}
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := sess.RequestPty("xterm-256color", rows, cols, modes); err != nil {

@@ -331,6 +331,9 @@ function wireServerOpen(el, id) {
   el.addEventListener('contextmenu', (e) => openMenu(e, el, serverMenu(id)));
 }
 const serverMenu = (id) => [
+  ...(state.snaps.get(id)?.status === 'offline'
+    ? [{ label: 'Reconnect now', icon: 'refresh', title: 'Connect again without waiting for the next retry', action: () => call('Reconnect', id) }, { sep: true }]
+    : []),
   { label: 'Open', icon: 'arrowRight', action: () => { location.hash = hashFor(id); } },
   { label: 'Open in new tab', icon: 'forward', action: () => tabs.open(id) },
   { label: 'Edit connection…', icon: 'edit', action: () => openServerForm(state.servers.get(id), groupsList(), [...state.servers.values()]) },
@@ -734,14 +737,17 @@ function detailView(id, root) {
   const title = h('h1');
   const chipSlot = h('span');
   const meta = h('div', { class: 'meta' });
-  const errBox = h('div', { class: 'panel card-error', hidden: true });
+  const errText = h('span', { class: 'card-error-text' });
+  // Unreachable: connect again now instead of waiting for the next automatic retry.
+  const reconnectBtn = h('button', { type: 'button', class: 'btn sm', title: 'Connect to the server again now', onclick: () => refreshBtn.click() }, icon('refresh'), 'Reconnect');
+  const errBox = h('div', { class: 'panel card-error conn-error', hidden: true }, errText, reconnectBtn);
   const alertBox = h('div', { class: 'alert-box', role: 'status', hidden: true });
   const resetBtn = h('button', { class: 'btn ghost', hidden: true, onclick: async () => {
     if (!(await confirmDialog('Trust the new host key of this server?\n\n⚠ Only do this if you know the server was reinstalled or its SSH key was changed. Otherwise someone may be intercepting the connection.', 'Reset host key'))) return;
     await call('ResetHostKey', id).catch((e) => toast(e.message, true));
   } }, 'Reset host key');
   // Refresh: spins until a new snapshot of this server arrives, then confirms briefly.
-  let refreshing = null; // { since, timer }
+  let refreshing = null; // { since, timer, reconnect, failures }
   const refreshBtn = h('button', { class: 'btn act act-restart refresh-btn', title: 'Collect fresh metrics now' }, icon('refresh'), 'Refresh');
   function finishRefresh(ok, message) {
     if (!refreshing) return;
@@ -754,8 +760,10 @@ function detailView(id, root) {
     }
     clearTimeout(refreshing.timer);
     refreshing = null;
-    refreshBtn.disabled = false;
+    refreshBtn.disabled = reconnectBtn.disabled = false;
     refreshBtn.classList.remove('busy');
+    reconnectBtn.classList.remove('busy');
+    setLabel(reconnectBtn, 'refresh', 'Reconnect');
     if (ok) setLabel(refreshBtn, 'check', 'Updated');
     else setLabel(refreshBtn, 'refresh', 'Refresh');
     if (ok) {
@@ -769,11 +777,18 @@ function detailView(id, root) {
   }
   refreshBtn.addEventListener('click', () => {
     if (refreshing) return;
-    refreshing = { since: Date.now(), timer: setTimeout(() => finishRefresh(false, 'Refresh timed out — the server did not answer within 30 s'), 30000) };
-    refreshBtn.disabled = true;
+    // An unreachable server is connected again at once (skipping the retry delay and any dead connection).
+    const reconnect = state.snaps.get(id)?.status === 'offline';
+    refreshing = { since: Date.now(), reconnect, failures: 0,
+      timer: setTimeout(() => finishRefresh(false, `${reconnect ? 'Reconnect' : 'Refresh'} timed out — the server did not answer within 30 s`), 30000) };
+    refreshBtn.disabled = reconnectBtn.disabled = true;
     refreshBtn.classList.add('busy');
-    setLabel(refreshBtn, 'refresh', 'Refreshing…');
-    call('Refresh', id);
+    setLabel(refreshBtn, 'refresh', reconnect ? 'Reconnecting…' : 'Refreshing…');
+    if (reconnect) {
+      reconnectBtn.classList.add('busy');
+      setLabel(reconnectBtn, 'refresh', 'Reconnecting…');
+    }
+    call(reconnect ? 'Reconnect' : 'Refresh', id);
     if (range !== 'live') loadStored();
     loadEvents();
   });
@@ -1167,12 +1182,17 @@ function detailView(id, root) {
       meta.dataset.sig = sig;
       meta.replaceChildren(...facts.map(([ic, text, tip]) => h('span', { class: 'meta-item', title: tip }, icon(ic), text)));
     }
-    if (refreshing && snap.updatedAt > refreshing.since) {
+    if (refreshing && snap.updatedAt > refreshing.since && snap.updatedAt !== refreshing.seen) {
+      refreshing.seen = snap.updatedAt;
       if (snap.status === 'online' || snap.status === 'rebooting') finishRefresh(true);
-      else finishRefresh(false, `Refresh failed: ${snap.error || 'server unreachable'}`);
+      // A reconnect may first end a collection that was stuck on the dead connection; the fresh attempt follows it.
+      else if (!refreshing.reconnect || ++refreshing.failures >= 2) {
+        finishRefresh(false, `${refreshing.reconnect ? 'Still unreachable' : 'Refresh failed'}: ${snap.error || 'server unreachable'}`);
+      }
     }
     errBox.hidden = !snap.error || rebooting; // expected while it restarts
-    errBox.textContent = snap.error ? `Connection error: ${snap.error}` : '';
+    errText.textContent = snap.error ? `Connection error: ${snap.error}` : '';
+    reconnectBtn.hidden = snap.status !== 'offline';
     resetBtn.hidden = !/host key/i.test(snap.error || '');
     updateSummary(snap);
     maintP.update(snap.maintenance);
@@ -1313,6 +1333,13 @@ notifyToggle.addEventListener('change', () => {
 document.addEventListener('visibilitychange', () => {
   call('SetVisible', !document.hidden);
   if (!document.hidden) tabs?.flushActive();
+});
+// This computer lost or regained its network: say so, and reconnect every server as soon as it is back
+// (instead of each one waiting for its next retry on a connection that died meanwhile).
+window.addEventListener('offline', () => toast('This computer is offline — servers reconnect automatically when the network is back', true));
+window.addEventListener('online', () => {
+  call('NetworkBack');
+  toast('Network is back — reconnecting to servers');
 });
 
 document.getElementById('alerts-btn').addEventListener('click', openAlertSettings);

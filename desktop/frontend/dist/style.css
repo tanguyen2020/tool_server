@@ -230,6 +230,9 @@ textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
 .card-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-head .chips { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
 .card-error { color: var(--critical-ink); font-size: 12px; word-break: break-word; }
+.conn-error { display: flex; align-items: center; gap: 12px; }
+.conn-error .card-error-text { flex: 1; min-width: 0; }
+.conn-error .btn { flex-shrink: 0; }
 .card-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12px; }
 .card-foot b { color: var(--ink); font-weight: 600; }
 

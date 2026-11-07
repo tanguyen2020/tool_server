@@ -166,6 +166,12 @@ func (a *App) History(serverID string, minutes int) (*history.Result, error) {
 
 func (a *App) Refresh(id string) { go a.mon.Collect(id) }
 
+// Reconnect connects to an unreachable server again now, instead of waiting for the next retry.
+func (a *App) Reconnect(id string) { go a.mon.Reconnect(id) }
+
+// NetworkBack is called when the computer's network comes back: reconnects every server at once.
+func (a *App) NetworkBack() { go a.mon.ReconnectAll() }
+
 func (a *App) SetSettings(s store.Settings) error { return a.st.SetSettings(s) }
 
 // SetUIPref remembers a view preference of the page (see store.Settings.UI).
