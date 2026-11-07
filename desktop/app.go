@@ -41,6 +41,7 @@ type App struct {
 	clones cloneJobs
 	act    *activity.Log
 	upd    *updater.Updater
+	appKey sync.Map // server id -> fingerprint of the key the app's connection used (from the SSH log)
 
 	announced string // update version already announced (installs that cannot update themselves)
 }

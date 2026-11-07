@@ -214,6 +214,7 @@ type TaskInfo struct {
 //   - compose:<update|up|restart|stop|start|down> with the project name
 //   - upgrade (apt-get update && upgrade, answers typed by the user)
 //   - autoremove (apt-get autoremove, answered by the user)
+//   - installufw (apt-get install ufw, answered by the user)
 //   - journal with a service name (follows its journal)
 //   - shell with a folder (a shell opened in that folder)
 //   - dockerlogin with a registry (empty: Docker Hub), answered by the user
@@ -238,6 +239,8 @@ func (a *App) OpenTask(serverID, kind, arg string, cols, rows int) (TaskInfo, er
 		script, title, audit = ops.UpgradeScript(), "apt upgrade", "package upgrade"
 	case kind == "autoremove":
 		script, title, audit = ops.AutoremoveScript(), "apt autoremove", "system cleanup"
+	case kind == "installufw":
+		script, title, audit = ops.InstallUfwScript(), "install ufw", "firewall install"
 	case kind == "journal":
 		if script, err = ops.JournalScript(arg); err != nil {
 			return TaskInfo{}, err

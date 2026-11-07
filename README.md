@@ -106,6 +106,9 @@ Images can be pulled or copied straight from the source server.
 - **Services tab** (systemd): start, stop, restart, enable or disable services and follow their journal.
 - **Files tab** (SFTP): browse, edit, upload and download files, and save root-owned files through `sudo -n`.
 - **Network tab**: listening ports with their process and container, and **port forwarding** (`ssh -L`) in one click.
+- **Security tab**: ports open to the network (including Docker ports that skip ufw), the **ufw firewall** (rules, on/off,
+  with a guard against locking yourself out), who is signed in, **failed SSH logins** by address with one-click blocking,
+  and the **authorized SSH keys** of every user (add, remove, last use, weak keys).
 - **Maintenance**: shows pending and security updates, required reboots and TLS certificate expiry. Run `apt upgrade` or reboot from the app.
 - **Docker cleanup**: removes stopped containers, unused images, build cache, networks and volumes, showing the space you get back.
 - **Run on servers**: runs one command on many servers at once and shows the results side by side.

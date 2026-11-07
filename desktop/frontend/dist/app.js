@@ -7,6 +7,7 @@ import { initDock, setDockServer, closeDockServer, openTerminalFor, openTaskFor,
 import { servicesTab } from './services.js';
 import { filesTab } from './files.js';
 import { networkTab, forwardContainer, containerTunnels, watchTunnels } from './network.js';
+import { securityTab } from './security.js';
 import { openRunMany } from './runmany.js';
 import { cloneView, TAB_TITLE as CLONE_TITLE } from './clone.js';
 import { initCloneJobs, setBadgeListener, runningSummary as cloneRunning } from './clone-progress.js';
@@ -695,7 +696,7 @@ const inlineKV = (pairs) => pairs.map(([k, v]) => h('span', {}, `${k} `, h('b', 
 
 // Remember the last tab across servers and restarts (per-viewer convenience only).
 const TAB_KEY = 'detailTab';
-const TABS = ['server', 'containers', 'metrics', 'services', 'files', 'network'];
+const TABS = ['server', 'containers', 'metrics', 'services', 'files', 'network', 'security'];
 const RANGE_KEY = 'detailRange';
 // 'live' = the in-memory 5-second data of this session; others come from the on-disk history.
 const RANGES = [['live', 'Live 30m', 0], ['1h', '1h', 60], ['6h', '6h', 360], ['24h', '24h', 1440], ['7d', '7d', 10080]];
@@ -818,6 +819,7 @@ function detailView(id, root) {
     services: h('button', { type: 'button', class: 'page-tab', role: 'tab', id: 'tab-services', 'aria-controls': 'pane-services' }, 'Services'),
     files: h('button', { type: 'button', class: 'page-tab', role: 'tab', id: 'tab-files', 'aria-controls': 'pane-files' }, 'Files'),
     network: h('button', { type: 'button', class: 'page-tab', role: 'tab', id: 'tab-network', 'aria-controls': 'pane-network' }, 'Network'),
+    security: h('button', { type: 'button', class: 'page-tab', role: 'tab', id: 'tab-security', 'aria-controls': 'pane-security' }, 'Security'),
   };
   const tabList = h('div', { class: 'page-tabs', role: 'tablist', 'aria-label': 'Server sections' }, TABS.map((k) => tabBtns[k]));
 
@@ -1057,6 +1059,7 @@ function detailView(id, root) {
   const services = servicesTab(id, { serverName, openJournal: (name) => openTaskFor(id, { kind: 'journal', arg: name, title: `journal ${name.replace(/\.service$/, '')}` }) });
   const files = filesTab(id, { serverName, openShellAt: (path) => openTaskFor(id, { kind: 'shell', arg: path, title: `${serverName()}:${path}` }) });
   const network = networkTab(id, { serverName, containers: () => state.snaps.get(id)?.docker?.containers || [] });
+  const security = securityTab(id, { serverName, openTask: (task) => openTaskFor(id, task) });
 
   const panes = {
     server: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-server', 'aria-labelledby': 'tab-server' },
@@ -1065,6 +1068,7 @@ function detailView(id, root) {
     services: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-services', 'aria-labelledby': 'tab-services' }, services.el),
     files: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-files', 'aria-labelledby': 'tab-files' }, files.el),
     network: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-network', 'aria-labelledby': 'tab-network' }, ...network.panels),
+    security: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-security', 'aria-labelledby': 'tab-security' }, ...security.panels),
     containers: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-containers', 'aria-labelledby': 'tab-containers' }, containers.el),
     metrics: h('div', { class: 'panels', role: 'tabpanel', id: 'pane-metrics', 'aria-labelledby': 'tab-metrics' }, ...metrics.panels, dfP.el, logsP.el),
   };
@@ -1084,6 +1088,7 @@ function detailView(id, root) {
     services.setActive(next === 'services');
     files.setActive(next === 'files');
     network.setActive(next === 'network');
+    security.setActive(next === 'security');
     // The time range only applies to the charts (Server and Container metrics tabs).
     rangePicker.hidden = rangeNote.hidden = next !== 'server' && next !== 'metrics';
   }
@@ -1263,6 +1268,7 @@ function detailView(id, root) {
       services.destroy();
       files.destroy();
       network.destroy();
+      security.destroy();
       unwatchTunnels();
       [...hostCharts, spaceChart].forEach((c) => c.destroy());
     },

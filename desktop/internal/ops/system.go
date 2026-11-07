@@ -298,6 +298,13 @@ export DEBIAN_FRONTEND=readline
 $S apt-get update && $S apt-get upgrade`)
 }
 
+// InstallUfwScript installs the ufw firewall in a terminal (installed off: turning it on is a separate step).
+func InstallUfwScript() string {
+	return banner(`S=""; [ "$(id -u)" -ne 0 ] && S="sudo"
+export DEBIAN_FRONTEND=readline
+$S apt-get install ufw`)
+}
+
 // ShellAt opens a login shell in a folder.
 func ShellAt(path string) (string, error) {
 	if err := validPath(path); err != nil {

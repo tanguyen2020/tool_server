@@ -569,3 +569,24 @@ func (c *Conn) Terminal(cols, rows int, command string) (*Term, error) {
 	}
 	return &Term{sess: sess, stdin: stdin, out: out}, nil
 }
+
+// KeyFingerprint is the SHA256 fingerprint of the server's private key (key sign-in only), "" otherwise.
+func KeyFingerprint(srv store.Server) string {
+	if srv.AuthType != "key" && srv.AuthType != "keyPath" {
+		return ""
+	}
+	c, err := store.Decrypt(srv)
+	if err != nil {
+		return ""
+	}
+	var signer ssh.Signer
+	if c.PlainPassphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(c.PlainPrivateKey, []byte(c.PlainPassphrase))
+	} else {
+		signer, err = ssh.ParsePrivateKey(c.PlainPrivateKey)
+	}
+	if err != nil {
+		return ""
+	}
+	return ssh.FingerprintSHA256(signer.PublicKey())
+}

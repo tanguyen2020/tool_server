@@ -147,6 +147,24 @@ Everything runs on the SSH connection the dashboard already holds; commands are 
   publishes the port, and whether it is reachable from the network or only from the server.
   **Port forwarding** (like `ssh -L`): opens `localhost:<port>` on this computer leading to a host:port reachable from
   the server (databases, admin pages bound to 127.0.0.1); one click from a port row. Forwards stop when the app closes.
+- **Security tab**: a summary of checks (firewall, ports open to the network, password and root login, failed logins,
+  who is signed in), then:
+  - **Open to the network**: every port anyone can reach, with its risk and how to fix it. Docker's published ports
+    skip ufw (Docker's iptables rules come first), so a database published on `0.0.0.0` is flagged even when ufw
+    does not allow it.
+  - **Firewall (ufw)**: turn it on or off, add and delete rules. Deny rules go first. A change that would block SSH
+    from this computer is refused, and turning ufw on adds a rule for SSH first when needed. Install ufw from here
+    when it is missing. Other firewalls (nftables, iptables) are detected and shown, not changed.
+  - **Signed in now** (logind, or `who`): sign out a session. The app's own session is marked and cannot be ended.
+  - **Failed SSH logins** (24h, 7 or 30 days, from the systemd journal, one attempt per connection): addresses with
+    attempts, user names tried, **Block** with one click. **Recent SSH logins** show the method and which key was used.
+  - **Authorized SSH keys** of every user, following sshd's `AuthorizedKeysFile`: type, comment, fingerprint,
+    restrictions, last use and weak keys (RSA under 2048 bits, DSA). Add or remove keys, or **create a new user** with
+    its first key: home folder, bash, no password (keys only), and optionally the docker group or sudo without a
+    password (a file in `/etc/sudoers.d`, checked with `visudo`). Files are replaced atomically
+    with their owner and mode kept, and only if they did not change meanwhile. The key the app signs in with cannot
+    be removed.
+  Reading everything needs root (or sudo without a password); without it the tab shows what the user can see.
 - **Disk usage by folder** (Server tab): `du` on one file system, starting with the fullest disk; click to drill down.
 - **Package upgrade**: *Upgrade…* in Maintenance runs `apt-get update && apt-get upgrade` in a terminal tab where you
   answer apt's prompts (and sudo's password if asked); the maintenance status is checked again afterwards.

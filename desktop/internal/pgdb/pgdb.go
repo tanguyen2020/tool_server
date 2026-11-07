@@ -35,6 +35,9 @@ type ExitError struct{ Code int }
 
 func (e *ExitError) Error() string { return fmt.Sprintf("exit code %d", e.Code) }
 
+// ExitCode lets other packages read the code without depending on this one.
+func (e *ExitError) ExitCode() int { return e.Code }
+
 // Side is one end of a job: a server and the docker command to use on it.
 type Side struct {
 	Host    Host
