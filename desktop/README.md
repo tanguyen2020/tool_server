@@ -115,8 +115,19 @@ Built with Go + Wails; the plain-JS UI is embedded in a single `.exe` (~12 MB) a
 - **Built-in terminal** (xterm.js): `>_ Terminal` opens a shell on the server and **Exec** opens one inside a container
   (`docker exec -it`, bash or sh), both on the SSH connection the dashboard already holds — no second login.
   Logs and terminals share the bottom panel as tabs (like VS Code); they keep running while collapsed or in another server tab.
-  Copy/paste with Ctrl+Shift+C / Ctrl+Shift+V or right-click, search (Ctrl+Shift+F), font size (Ctrl+= / Ctrl+-),
-  colors follow the theme, Enter reconnects an ended session. Up to 4 terminals per server, numbered (`web-01`, `web-01 #2`).
+  It looks and types like the terminal of the system, so habits carry over:
+  - **Windows** — like Windows Terminal: Cascadia Mono 12 pt, Campbell colours, bar cursor, 8 px padding.
+    Ctrl+C copies when text is selected (interrupts otherwise), Ctrl+V pastes (a single line without its trailing
+    newline), also Ctrl+Shift+C / V, Ctrl+Insert / Shift+Insert and right-click (copy the selection, or paste).
+  - **macOS** — like Terminal.app: SF Mono 11 pt, block cursor; ⌘C / ⌘V, ⌘K clears, ⌘T new terminal,
+    ⇧⌘[ / ⇧⌘] switch, Page Up / Page Down scroll back.
+  - **Linux** — like GNOME Terminal: the system monospace font 11 pt, GNOME colours; Ctrl+Shift+C / V,
+    Ctrl+Page Up / Page Down switch.
+  - Everywhere: search (Ctrl+Shift+F / ⌘F), select all (Ctrl+Shift+A / ⌘A), text size Ctrl+= / Ctrl+- / Ctrl+0 and
+    Ctrl+mouse wheel, Ctrl+Shift+T new terminal, Ctrl+Shift+D duplicate, Ctrl+Tab / Ctrl+Shift+Tab next / previous
+    terminal, Ctrl+Shift+↑ / ↓ / Page Up / Page Down / Home / End scroll, Ctrl+click (⌘-click) opens a link,
+    double-click selects a word.
+  Enter reconnects an ended session. Up to 4 terminals per server, numbered (`web-01`, `web-01 #2`).
   Close one panel tab with its ✕, middle click, right-click (*Close / Close other tabs / Close all terminals*) or
   **Ctrl+Shift+W** (works inside a terminal); Ctrl+W closes the panel tab when the focus is in the panel outside a shell.
   Inside a terminal, other app shortcuts such as Ctrl+W go to the shell.

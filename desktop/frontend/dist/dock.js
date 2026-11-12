@@ -206,6 +206,17 @@ export function initDock({ snapshot }) {
   });
   document.addEventListener('dock:changed', (e) => { if (e.detail.key === server) render(); });
   document.addEventListener('term:search', openSearch);
+  // New tab / duplicate tab (Ctrl+Shift+T / Ctrl+Shift+D, ⌘T) from inside a terminal.
+  document.addEventListener('term:new', (e) => {
+    if (e.detail.server === server) openTerminalFor(server, e.detail.container || '');
+  });
+  // Next / previous terminal (Ctrl+Tab, Ctrl+Shift+Tab…), like the tabs of a terminal app.
+  document.addEventListener('term:cycle', (e) => {
+    const list = server ? terminalsOf(server) : [];
+    if (list.length < 2) return;
+    const i = list.indexOf(activePane.get(server));
+    select(list[(i + e.detail.dir + list.length) % list.length]);
+  });
   // Capture phase: runs before the app's tab shortcuts and before xterm sees the key.
   window.addEventListener('keydown', (e) => {
     if (!isMod(e) || e.altKey || e.key.toLowerCase() !== 'w' || panel.hidden) return;

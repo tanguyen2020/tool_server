@@ -627,7 +627,8 @@ tbody tr:not(.project-row):hover td { background: var(--hover); }
 .dock-pane[hidden] { display: none !important; }
 #logs-pane .logs-body { flex: 1; min-height: 0; }
 .term-host { flex: 1; min-height: 0; position: relative; background: var(--page); }
-.term-view { position: absolute; inset: 6px 4px 4px 12px; }
+/* 8 px all round, like Windows Terminal's default padding (the scrollbar takes the right side). */
+.term-view { position: absolute; inset: 8px 2px 8px 8px; }
 .term-view .xterm { height: 100%; }
 .term-view .xterm-viewport { scrollbar-width: thin; }
 .term-search { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
